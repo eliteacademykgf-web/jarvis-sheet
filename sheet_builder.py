@@ -80,7 +80,8 @@ def _rgb(red=0, green=0, blue=0):
 
 # Условное форматирование — правила из шаблона как есть. Поменяны только
 # диапазоны: L — на все строки данных (было 3–17), R — только R
-# (было R–Z, а там теперь скрытые ad_id и клики).
+# (было R–Z, а там теперь скрытые ad_id и клики). Числа — с запятой
+# (локаль ru_RU): «0.80%» из шаблона API отвергает как невалидное.
 def _bool_rule(cond_type, values, bg):
     return {"booleanRule": {
         "condition": {"type": cond_type,
@@ -104,8 +105,8 @@ COND_RULES = [
         "maxpoint": {"type": "NUMBER", "value": "2,7",
                      "colorStyle": {"rgbColor": _rgb(0.9, 0.49, 0.45)}},
     }}),
-    (I, "all",  _bool_rule("NUMBER_BETWEEN", ["0.80%", "0.90%"], _rgb(1, 0.9, 0.6))),
-    (I, "all",  _bool_rule("NUMBER_LESS", ["0.60%"], _rgb(0.88, 0.4, 0.4))),
+    (I, "all",  _bool_rule("NUMBER_BETWEEN", ["0,8%", "0,9%"], _rgb(1, 0.9, 0.6))),
+    (I, "all",  _bool_rule("NUMBER_LESS", ["0,6%"], _rgb(0.88, 0.4, 0.4))),
 ]
 
 
