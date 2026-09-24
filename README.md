@@ -1,14 +1,17 @@
 # jarvis-sheet
 
-CRM-логика для таблицы сквозной аналитики: метрики за день по AmoCRM.
-Здесь нет Telegram, Meta и Google Sheets, только AmoCRM.
+Данные для таблицы сквозной аналитики: CRM-метрики за день из AmoCRM
+и статистика объявлений по дням из Meta Marketing API.
+Здесь нет Telegram и Google Sheets.
 
 ## Файлы
 
-- `config.py`: переменные окружения (`AMO_DOMAIN`, `AMO_TOKEN`).
+- `config.py`: переменные окружения (`AMO_DOMAIN`, `AMO_TOKEN`, `META_TOKEN`, `AD_ACCOUNT_ID`).
 - `amo_client.py`: запросы к AmoCRM. Перенесено из `jarvis-amo/main.py` без изменения поведения.
 - `metrics.py`: `compute_daily_metrics(date, pipeline_id, code_word=None)`.
 - `verify.py`: суммы за прошлый календарный месяц для ручной сверки с ботом.
+- `meta_client.py`: `get_daily_ad_stats(ad_account_id, date, access_token)`, строки объявление × день.
+- `verify_meta.py`: последние 7 полных дней из Meta для ручной сверки с Ads Manager.
 
 ## Запуск локально
 
@@ -16,8 +19,9 @@ CRM-логика для таблицы сквозной аналитики: ме
 cd jarvis-sheet
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env    # заполнить AMO_DOMAIN и AMO_TOKEN
+cp .env.example .env    # заполнить AMO_* и META_TOKEN / AD_ACCOUNT_ID
 python verify.py
+python verify_meta.py
 ```
 
 Можно без `.env`: переменные окружения тоже подхватываются
@@ -42,3 +46,15 @@ python verify.py
 История переходов запрашивается через `/events` с `filter[entity_id]`,
 по 10 лидов за запрос (больше AmoCRM не принимает). При ~130 сделках в день
 это ~13 запросов на историю плюс лиды, контакты и события продаж.
+
+## Meta
+
+- Graph API v26.0. Запрос `/act_{id}/insights` с `level=ad`, `time_increment=1`,
+  пагинация по `paging.next` до конца.
+- Дни в часовом поясе рекламного аккаунта (сейчас Europe/Moscow, UTC+3),
+  а CRM считает по Бишкеку (UTC+6).
+- Токен передаётся заголовком `Authorization` и в URL не попадает. Все тексты
+  ошибок и логов маскируются (`access_token=***`).
+- Ошибка Meta поднимает `MetaAPIError` (message, code, HTTP-статус).
+- `dm_leads` и `site_leads` хранятся раздельно (открытый вопрос ТЗ №5).
+- Объявления без активности Meta не возвращает, нулевых строк нет.
