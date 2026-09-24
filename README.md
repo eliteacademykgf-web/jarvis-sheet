@@ -2,14 +2,16 @@
 
 Данные для таблицы сквозной аналитики: CRM-метрики за день из AmoCRM
 и статистика объявлений по дням из Meta Marketing API.
-Здесь нет Telegram и Google Sheets.
+Пишет сырые данные в Google Sheets (листы `meta_daily` и `crm_daily`). Telegram здесь нет.
 
 ## Файлы
 
-- `config.py`: переменные окружения (`AMO_DOMAIN`, `AMO_TOKEN`, `META_TOKEN`, `AD_ACCOUNT_ID`).
+- `config.py`: переменные окружения (`AMO_DOMAIN`, `AMO_TOKEN`, `META_TOKEN`, `AD_ACCOUNT_ID`, `SPREADSHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`).
 - `amo_client.py`: запросы к AmoCRM. Перенесено из `jarvis-amo/main.py` без изменения поведения.
 - `metrics.py`: `compute_daily_metrics(date, pipeline_id)`, одна сводка CRM на день без разбивки по объявлениям.
 - `build_daily_source.py`: `build_meta_rows(date)` (строка на объявление, Meta) и `build_crm_row(date)` (одна сводка CRM на день). Не склеиваются: склейка на уровне таблицы.
+- `sheets_client.py`: подключение к Google Sheets и upsert на листы `meta_daily` / `crm_daily`.
+- `write_to_sheets.py`: запись дня (по умолчанию вчера) в таблицу.
 - `verify.py`: один день (по умолчанию вчера): Meta по объявлениям и CRM одной сводкой, друг под другом. С `--month` выводит суммы за прошлый календарный месяц для сверки с ботом.
 - `meta_client.py`: `get_daily_ad_stats(ad_account_id, date, access_token)`, строки объявление × день.
 - `verify_meta.py`: последние 7 полных дней из Meta для ручной сверки с Ads Manager.
@@ -25,6 +27,8 @@ python verify.py              # вчера: Meta по объявлениям + C
 python verify.py 2026-09-20   # конкретный день
 python verify.py --month      # сверка месяца с ботом
 python verify_meta.py
+python write_to_sheets.py              # вчера → Google Sheets
+python write_to_sheets.py 2026-09-20   # конкретный день
 ```
 
 Можно без `.env`: переменные окружения тоже подхватываются
@@ -61,3 +65,19 @@ python verify_meta.py
 - Ошибка Meta поднимает `MetaAPIError` (message, code, HTTP-статус).
 - `dm_leads` и `site_leads` хранятся раздельно (открытый вопрос ТЗ №5).
 - Объявления без активности Meta не возвращает, нулевых строк нет.
+
+## Google Sheets
+
+- Сервисный аккаунт, JSON-ключ по пути `GOOGLE_SERVICE_ACCOUNT_JSON`. Ключ хранить
+  вне репозитория. Аккаунт должен быть редактором таблицы, иначе
+  `SheetsAccessError` («Нет доступа к таблице …»).
+- Скрипт трогает только свои листы `meta_daily` и `crm_daily`. Если листа нет,
+  он создаётся с заголовками. Существующий лист не меняется, кроме строк данных.
+  Остальные листы не удаляются и не меняются.
+- Upsert по ключу: `(date, ad_id)` для `meta_daily`, `date` для `crm_daily`.
+  Повторный запуск за тот же день обновляет строки на месте.
+- Одно чтение листа и один `batch_update` на лист. Полный прогон — 7 запросов
+  к Google API, первый (с созданием листов) — 11.
+- Запись `RAW`: `date` и `ad_id` лежат текстом (иначе Sheets округлит 18-значный
+  `ad_id` и переведёт дату в число), числа — числами. В формулах дату
+  можно получить через `DATEVALUE`.
