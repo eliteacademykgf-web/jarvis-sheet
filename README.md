@@ -10,7 +10,7 @@
 - `amo_client.py`: запросы к AmoCRM. Перенесено из `jarvis-amo/main.py` без изменения поведения.
 - `metrics.py`: `compute_daily_metrics(date, pipeline_id)`, одна сводка CRM на день без разбивки по объявлениям.
 - `build_daily_source.py`: `build_meta_rows(date)` (строка на объявление, Meta) и `build_crm_row(date)` (одна сводка CRM на день). Не склеиваются: склейка на уровне таблицы.
-- `verify.py`: суммы за прошлый календарный месяц для ручной сверки с ботом.
+- `verify.py`: один день (по умолчанию вчера): Meta по объявлениям и CRM одной сводкой, друг под другом. С `--month` выводит суммы за прошлый календарный месяц для сверки с ботом.
 - `meta_client.py`: `get_daily_ad_stats(ad_account_id, date, access_token)`, строки объявление × день.
 - `verify_meta.py`: последние 7 полных дней из Meta для ручной сверки с Ads Manager.
 
@@ -21,7 +21,9 @@ cd jarvis-sheet
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env    # заполнить AMO_* и META_TOKEN / AD_ACCOUNT_ID
-python verify.py
+python verify.py              # вчера: Meta по объявлениям + CRM за день
+python verify.py 2026-09-20   # конкретный день
+python verify.py --month      # сверка месяца с ботом
 python verify_meta.py
 ```
 
