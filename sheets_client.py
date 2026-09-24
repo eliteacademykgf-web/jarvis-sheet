@@ -21,6 +21,15 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+META_SHEET = "meta_daily"
+META_HEADERS = ["date", "ad_id", "ad_name", "campaign_name", "adset_name",
+                "spend", "impressions", "clicks", "ctr", "cpm",
+                "dm_leads", "site_leads"]
+
+CRM_SHEET = "crm_daily"
+CRM_HEADERS = ["date", "new_request", "lead", "qualified", "consult_scheduled",
+               "consult_done", "sale", "revenue", "note"]
+
 
 def get_client() -> gspread.Client:
     """
