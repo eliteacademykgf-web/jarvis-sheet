@@ -573,3 +573,70 @@ def week_bounds() -> tuple:
     start = end - timedelta(days=6)
     return int(start.timestamp()), int(end.timestamp())
 
+
+
+# ============================================================
+# ИСТОРИЯ ПЕРЕХОДОВ ПО ЛИДАМ (новое, для накопительных метрик)
+# ============================================================
+# Кэш истории по lead_id: история закрытого лида уже не меняется,
+# а в рамках одного запуска скрипта этого достаточно.
+_status_history_cache: Dict[int, list] = {}
+
+EVENTS_ENTITY_ID_LIMIT = 10  # AmoCRM: не больше 10 id в filter[entity_id]
+
+
+def amo_get_status_history(lead_ids: List[int]) -> Dict[int, list]:
+    """
+    Все переходы lead_status_changed по указанным лидам, за всё время.
+
+    /events без фильтра по дате, но с filter[entity_id] — пакетами по 10 id
+    (больше AmoCRM не принимает: 400 «More params given than allowed»).
+    ~130 лидов в день = ~13 запросов, а не 130.
+
+    Возвращает {lead_id: [(ts, [(status_id, pipeline_id), ...]), ...]} —
+    для каждого события статусы value_before и value_after.
+    """
+    result: Dict[int, list] = {}
+    todo = []
+    for lid in lead_ids:
+        if lid in _status_history_cache:
+            result[lid] = _status_history_cache[lid]
+        else:
+            todo.append(lid)
+
+    for i in range(0, len(todo), EVENTS_ENTITY_ID_LIMIT):
+        chunk = todo[i:i + EVENTS_ENTITY_ID_LIMIT]
+        hist: Dict[int, list] = {lid: [] for lid in chunk}
+        params: dict = {
+            "filter[type]":   "lead_status_changed",
+            "filter[entity]": "lead",
+        }
+        for j, lid in enumerate(chunk):
+            params[f"filter[entity_id][{j}]"] = lid
+        page = 1
+        MAX_PAGES = 50
+        while page <= MAX_PAGES:
+            data = _amo_get("events", {**params, "limit": 100, "page": page})
+            if not data or "_error" in data:
+                break
+            evs = data.get("_embedded", {}).get("events", [])
+            if not evs:
+                break
+            for e in evs:
+                lid = e.get("entity_id")
+                if lid not in hist:
+                    continue
+                statuses = []
+                for v in (e.get("value_before") or []) + (e.get("value_after") or []):
+                    ls = (v or {}).get("lead_status") or {}
+                    if ls.get("id"):
+                        statuses.append((ls["id"], ls.get("pipeline_id")))
+                hist[lid].append((e.get("created_at") or 0, statuses))
+            if len(evs) < 100:
+                break
+            page += 1
+        for lid, h in hist.items():
+            _status_history_cache[lid] = h
+            result[lid] = h
+        time.sleep(0.15)
+    return result
