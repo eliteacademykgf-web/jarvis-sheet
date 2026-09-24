@@ -57,6 +57,11 @@ CRM_SHEET = "crm_daily"
 CRM_HEADERS = ["date", "new_request", "lead", "qualified", "consult_scheduled",
                "consult_done", "sale", "revenue", "note"]
 
+# Ручной справочник объявлений: менеджеры правят code_word и status,
+# отчёт только читает. Скрипт лишь дописывает строки для новых ad_id.
+ADS_MANUAL_SHEET = "ads_manual"
+ADS_MANUAL_HEADERS = ["ad_id", "ad_name", "code_word", "status"]
+
 
 def get_client() -> gspread.Client:
     """
@@ -167,3 +172,29 @@ def write_crm_row(row: dict,
     with _access_errors():
         ws = get_or_create_worksheet(spreadsheet, CRM_SHEET, CRM_HEADERS)
         return _upsert(ws, CRM_HEADERS, ["date"], [row])
+
+
+def read_ads_manual(spreadsheet: gspread.Spreadsheet, ads: dict) -> dict:
+    """
+    Справочник ads_manual: {ad_id: {"code_word", "status"}}.
+
+    ads — {ad_id: ad_name} объявлений, которые сейчас попадут в отчёт.
+    Тех, кого в справочнике нет, дописываем в конец строкой
+    (ad_id, ad_name, "", ""), чтобы менеджеру было что заполнить.
+    Существующие строки не меняются.
+    """
+    with _access_errors():
+        ws = get_or_create_worksheet(spreadsheet, ADS_MANUAL_SHEET, ADS_MANUAL_HEADERS)
+        values = ws.get_all_values()
+        if not values or values[0][:len(ADS_MANUAL_HEADERS)] != ADS_MANUAL_HEADERS:
+            raise RuntimeError(f"Лист «{ADS_MANUAL_SHEET}»: первая строка не совпадает "
+                               f"с {ADS_MANUAL_HEADERS}")
+        manual = {}
+        for r in values[1:]:
+            r = r + [""] * (len(ADS_MANUAL_HEADERS) - len(r))
+            if r[0]:
+                manual.setdefault(r[0], {"code_word": r[2], "status": r[3]})
+        missing = [[ad_id, name, "", ""] for ad_id, name in ads.items() if ad_id not in manual]
+        if missing:
+            ws.append_rows(missing, value_input_option=ValueInputOption.raw)
+    return manual
