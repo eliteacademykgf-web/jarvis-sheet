@@ -159,3 +159,30 @@ def get_ad_insights(ad_account_id: str, date_from: str, date_to: str,
         url = _strip_token(url)
         params = None  # в paging.next уже все параметры
     raise MetaAPIError(f"Meta API: больше {MAX_PAGES} страниц insights, прервано")
+
+
+# ============================================================
+# ЗАЯВКИ ИЗ actions — перенос из jarvis-meta/main.py как есть.
+# DM-заявки и заявки с сайта держим раздельно (dm_leads / site_leads):
+# объединять ли их в «Заявки с FB» — открытый вопрос ТЗ №5.
+# ============================================================
+def extract_leads(item):
+    """Лиды-переписки (Instagram DM / Messenger)"""
+    return sum(
+        int(a.get("value", 0)) for a in item.get("actions", [])
+        if "messaging_conversation" in a.get("action_type", "")
+    )
+
+
+def extract_site_leads(item):
+    """Лиды с сайта (через пиксель на Тильде)"""
+    SITE_LEAD_TYPES = {
+        "offsite_conversion.fb_pixel_lead",
+        "offsite_conversion.fb_pixel_complete_registration",
+        "lead",
+        "onsite_web_lead",
+    }
+    return sum(
+        int(a.get("value", 0)) for a in item.get("actions", [])
+        if a.get("action_type") in SITE_LEAD_TYPES
+    )
