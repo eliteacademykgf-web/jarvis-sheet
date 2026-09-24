@@ -9,6 +9,8 @@ sheets_client.py — запись сырых данных в Google Sheets.
 GOOGLE_SERVICE_ACCOUNT_JSON (файл лежит вне репозитория).
 """
 
+from contextlib import contextmanager
+from http import HTTPStatus
 from typing import List, Optional, Tuple
 
 import gspread
@@ -21,6 +23,30 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+
+class SheetsAccessError(RuntimeError):
+    """Сервисный аккаунт не видит таблицу или не может в неё писать."""
+
+
+@contextmanager
+def _access_errors():
+    """
+    404 / 403 от Google (SpreadsheetNotFound, PermissionError, APIError) ->
+    SheetsAccessError с понятным текстом; исходная ошибка в __cause__.
+    Остальные APIError (429, 5xx) пробрасываются как есть.
+    """
+    msg = (f"Нет доступа к таблице {SPREADSHEET_ID} — проверь, что сервисный "
+           f"аккаунт добавлен как редактор")
+    try:
+        yield
+    except (gspread.SpreadsheetNotFound, PermissionError) as e:
+        raise SheetsAccessError(msg) from e
+    except gspread.exceptions.APIError as e:
+        if e.response.status_code in (HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND):
+            raise SheetsAccessError(f"{msg} (Google: {e})") from e
+        raise
+
 
 META_SHEET = "meta_daily"
 META_HEADERS = ["date", "ad_id", "ad_name", "campaign_name", "adset_name",
@@ -70,7 +96,9 @@ def open_spreadsheet(client: Optional[gspread.Client] = None) -> gspread.Spreads
     """Таблица SPREADSHEET_ID."""
     if not SPREADSHEET_ID:
         raise RuntimeError("Нужен SPREADSHEET_ID в .env или окружении")
-    return (client or get_client()).open_by_key(SPREADSHEET_ID)
+    client = client or get_client()
+    with _access_errors():
+        return client.open_by_key(SPREADSHEET_ID)
 
 
 # ============================================================
@@ -126,12 +154,16 @@ def _upsert(ws: gspread.Worksheet, headers: List[str], key_fields: List[str],
 def write_meta_rows(rows: List[dict],
                     spreadsheet: Optional[gspread.Spreadsheet] = None) -> Tuple[int, int]:
     """Upsert строк Meta на лист meta_daily по (date, ad_id). -> (добавлено, обновлено)"""
-    ws = get_or_create_worksheet(spreadsheet or open_spreadsheet(), META_SHEET, META_HEADERS)
-    return _upsert(ws, META_HEADERS, ["date", "ad_id"], rows)
+    spreadsheet = spreadsheet or open_spreadsheet()
+    with _access_errors():
+        ws = get_or_create_worksheet(spreadsheet, META_SHEET, META_HEADERS)
+        return _upsert(ws, META_HEADERS, ["date", "ad_id"], rows)
 
 
 def write_crm_row(row: dict,
                   spreadsheet: Optional[gspread.Spreadsheet] = None) -> Tuple[int, int]:
     """Upsert строки CRM на лист crm_daily по date. -> (добавлено, обновлено)"""
-    ws = get_or_create_worksheet(spreadsheet or open_spreadsheet(), CRM_SHEET, CRM_HEADERS)
-    return _upsert(ws, CRM_HEADERS, ["date"], [row])
+    spreadsheet = spreadsheet or open_spreadsheet()
+    with _access_errors():
+        ws = get_or_create_worksheet(spreadsheet, CRM_SHEET, CRM_HEADERS)
+        return _upsert(ws, CRM_HEADERS, ["date"], [row])
