@@ -8,7 +8,7 @@
 
 - `config.py`: переменные окружения (`AMO_DOMAIN`, `AMO_TOKEN`, `META_TOKEN`, `AD_ACCOUNT_ID`).
 - `amo_client.py`: запросы к AmoCRM. Перенесено из `jarvis-amo/main.py` без изменения поведения.
-- `metrics.py`: `compute_daily_metrics(date, pipeline_id, code_word=None)`.
+- `metrics.py`: `compute_daily_metrics(date, pipeline_id)`, одна сводка CRM на день без разбивки по объявлениям.
 - `verify.py`: суммы за прошлый календарный месяц для ручной сверки с ботом.
 - `meta_client.py`: `get_daily_ad_stats(ad_account_id, date, access_token)`, строки объявление × день.
 - `verify_meta.py`: последние 7 полных дней из Meta для ручной сверки с Ads Manager.

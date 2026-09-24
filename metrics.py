@@ -194,12 +194,15 @@ def compute_metrics_range(df: int, dt: int,
 
 
 def compute_daily_metrics(date: date_cls,
-                          pipeline_id: int = SALES_DEPT_PIPELINE_ID,
-                          code_word: Optional[str] = None) -> dict:
+                          pipeline_id: int = SALES_DEPT_PIPELINE_ID) -> dict:
     """
-    Метрики за один календарный день (Бишкек).
+    Метрики за один календарный день (Бишкек), одна сводка по всей воронке:
     {new_request, lead, qualified, consult_scheduled, consult_done, sale, revenue}
-    Без code_word — по всей воронке.
+
+    Без разбивки по объявлениям: поле кодового слова в CRM не заполняется,
+    с заказчиком договорились считать CRM-показатели на день целиком.
+    Фильтр по кодовому слову остался в compute_metrics_range(code_word=...)
+    на случай, если поле начнут заполнять.
     """
     df, dt = day_bounds(date)
-    return compute_metrics_range(df, dt, pipeline_id, code_word)
+    return compute_metrics_range(df, dt, pipeline_id)
