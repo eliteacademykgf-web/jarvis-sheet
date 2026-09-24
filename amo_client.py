@@ -593,8 +593,8 @@ def amo_get_status_history(lead_ids: List[int]) -> Dict[int, list]:
     (больше AmoCRM не принимает: 400 «More params given than allowed»).
     ~130 лидов в день = ~13 запросов, а не 130.
 
-    Возвращает {lead_id: [(ts, [(status_id, pipeline_id), ...]), ...]} —
-    для каждого события статусы value_before и value_after.
+    Возвращает {lead_id: [(ts, before, after), ...]}, где before/after —
+    списки (status_id, pipeline_id) из value_before и value_after события.
     """
     result: Dict[int, list] = {}
     todo = []
@@ -626,12 +626,15 @@ def amo_get_status_history(lead_ids: List[int]) -> Dict[int, list]:
                 lid = e.get("entity_id")
                 if lid not in hist:
                     continue
-                statuses = []
-                for v in (e.get("value_before") or []) + (e.get("value_after") or []):
-                    ls = (v or {}).get("lead_status") or {}
-                    if ls.get("id"):
-                        statuses.append((ls["id"], ls.get("pipeline_id")))
-                hist[lid].append((e.get("created_at") or 0, statuses))
+                def _st(vals):
+                    out = []
+                    for v in vals or []:
+                        ls = (v or {}).get("lead_status") or {}
+                        if ls.get("id"):
+                            out.append((ls["id"], ls.get("pipeline_id")))
+                    return out
+                hist[lid].append((e.get("created_at") or 0,
+                                  _st(e.get("value_before")), _st(e.get("value_after"))))
             if len(evs) < 100:
                 break
             page += 1

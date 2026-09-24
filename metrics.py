@@ -23,7 +23,8 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from amo_client import (
-    STAGE_MAP, PIPELINE_IDS, WON_STATUS, LOST_STATUS, TZ_OFFSET_HOURS,
+    STAGE_MAP, PIPELINE_IDS, WON_STATUS, LOST_STATUS, PREPAY_STATUS_ID,
+    TZ_OFFSET_HOURS,
     FIELD_CODE_WORD, _pipeline, _cf_value, amo_get_leads, amo_get_closed_leads,
     amo_get_status_history, dedup_leads,
 )
@@ -107,13 +108,23 @@ def _max_reached_sort(lead: dict, pipeline_id: int, sort_by_id: Dict[int, int],
         return sort_by_id.get(sid, 0)
 
     best = sort_by_id.get(WON_STATUS, 0) if sid == WON_STATUS else 0
-    for _ts, statuses in history or []:
-        for st_id, st_pid in statuses:
+    for _ts, before, after in history or []:
+        for st_id, st_pid in before + after:
             if st_id == LOST_STATUS:
                 continue
             if st_id == WON_STATUS or st_pid == pipeline_id:
                 best = max(best, sort_by_id.get(st_id, 0))
     return best
+
+
+def _first_sale_ts(history: Optional[list]) -> Optional[int]:
+    """
+    Момент первой продажи: самое раннее событие перехода в 142 или
+    в «получена предоплата» (в любой воронке, как _load_won_events_batch).
+    """
+    ts_list = [ts for ts, _before, after in history or []
+               if any(st_id in (WON_STATUS, PREPAY_STATUS_ID) for st_id, _ in after)]
+    return min(ts_list) if ts_list else None
 
 
 def compute_metrics_range(df: int, dt: int,
@@ -125,9 +136,12 @@ def compute_metrics_range(df: int, dt: int,
 
     Этапы: когорта лидов, СОЗДАННЫХ в периоде в воронке pipeline_id
     (как amo_get_leads в боте), с дедупликацией dedup_leads, накопительно.
-    Продажи/выручка: как в боте — события перехода в 142 или в предоплату
-    в периоде (amo_get_closed_leads), по воронкам sales_pipeline_ids
-    (по умолчанию PIPELINE_IDS, как «Закрыто за период» в боте).
+    Продажи/выручка: события перехода в 142 или в предоплату в периоде
+    (amo_get_closed_leads), по воронкам sales_pipeline_ids (по умолчанию
+    PIPELINE_IDS). В отличие от бота, продажа засчитывается один раз —
+    в периоде ПЕРВОГО такого события: сделка с предоплатой 3-го и 142
+    20-го — продажа 3-го, а не двух дней. Иначе сумма по дням больше
+    месячной цифры.
 
     code_word: если передан, считаются только лиды (и продажи), у контакта
     которых кодовое слово совпадает после normalize_code_word. Разнесение
@@ -157,9 +171,17 @@ def compute_metrics_range(df: int, dt: int,
     counts["new_request"] = len(cohort)
 
     # ── Продажи: события перехода в 142 / предоплату в периоде ──────────
-    won_leads: list = []
+    won_by_id: Dict[int, dict] = {}
     for pid in sales_pids:
-        won_leads.extend(amo_get_closed_leads(pid, df, dt))
+        for l in amo_get_closed_leads(pid, df, dt):
+            won_by_id.setdefault(l["id"], l)   # одна сделка в двух воронках — одна продажа
+    sale_history = amo_get_status_history(list(won_by_id)) if won_by_id else {}
+    won_leads = []
+    for lid, l in won_by_id.items():
+        first = _first_sale_ts(sale_history.get(lid))
+        # first is None — история не загрузилась: считаем продажей, как бот
+        if first is None or first >= df:
+            won_leads.append(l)
     if key:
         won_leads = [l for l in won_leads if _match_code_word(l, key)]
     revenue = sum(float(l.get("price") or 0) for l in won_leads)
