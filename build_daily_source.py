@@ -15,6 +15,9 @@ from config import META_TOKEN, AD_ACCOUNT_ID
 from meta_client import get_daily_ad_stats
 from metrics import compute_daily_metrics
 
+# Не для формул: чтобы при экспорте/отладке было видно, почему цифра общая.
+CRM_NOTE = "Разбивка по объявлениям недоступна: поле кодового слова в CRM не заполняется"
+
 
 def build_meta_rows(date: date_cls) -> list:
     """
@@ -30,9 +33,11 @@ def build_crm_row(date: date_cls) -> dict:
     """
     Одна строка CRM-показателей за день (Бишкек) по всей воронке
     «Отдел продаж»: {date, new_request, lead, qualified,
-    consult_scheduled, consult_done, sale, revenue}.
+    consult_scheduled, consult_done, sale, revenue, note}.
+    note — пояснение происхождения цифр (CRM_NOTE).
     """
     return {
         "date": date.isoformat(),
         **compute_daily_metrics(date),
+        "note": CRM_NOTE,
     }
