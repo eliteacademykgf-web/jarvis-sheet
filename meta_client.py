@@ -186,3 +186,47 @@ def extract_site_leads(item):
         int(a.get("value", 0)) for a in item.get("actions", [])
         if a.get("action_type") in SITE_LEAD_TYPES
     )
+
+
+# ============================================================
+# ДНЕВНАЯ СТАТИСТИКА ПО ОБЪЯВЛЕНИЯМ
+# ============================================================
+def _num(value, cast):
+    """Число из строки Meta; поле отсутствует или пустое — 0."""
+    try:
+        return cast(value) if value not in (None, "") else cast(0)
+    except (TypeError, ValueError):
+        return cast(0)
+
+
+def get_daily_ad_stats(ad_account_id: str, date, access_token: str) -> list:
+    """
+    Статистика по объявлениям за один день (date: datetime.date или 'YYYY-MM-DD',
+    день в часовом поясе рекламного аккаунта).
+
+    Возвращает по строке на объявление:
+      {date, ad_id, ad_name, campaign_name, adset_name,
+       spend, impressions, clicks, ctr, cpm, dm_leads, site_leads}
+    Объявления без активности Meta не возвращает — нулевые строки не
+    дорисовываем (в отличие от CRM, где «0 заявок за день» — нужная строка).
+    """
+    day = date.isoformat() if hasattr(date, "isoformat") else str(date)
+    result = []
+    for row in get_ad_insights(ad_account_id, day, day, access_token):
+        result.append({
+            "date":          row.get("date_start") or day,
+            "ad_id":         row.get("ad_id"),
+            "ad_name":       row.get("ad_name"),
+            "campaign_name": row.get("campaign_name"),
+            "adset_name":    row.get("adset_name"),
+            "spend":         _num(row.get("spend"), float),
+            "impressions":   _num(row.get("impressions"), int),
+            "clicks":        _num(row.get("clicks"), int),
+            "ctr":           _num(row.get("ctr"), float),
+            "cpm":           _num(row.get("cpm"), float),
+            # у объявления без действий поля actions нет вовсе —
+            # extract_* читают item.get("actions", []) и дают 0
+            "dm_leads":      extract_leads(row),
+            "site_leads":    extract_site_leads(row),
+        })
+    return result
