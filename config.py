@@ -1,7 +1,7 @@
 """
 config.py — переменные окружения jarvis-sheet.
 
-AmoCRM и Meta Marketing API, без Telegram и Google Sheets.
+AmoCRM, Meta Marketing API и Google Sheets, без Telegram.
 Локально значения можно положить в .env рядом со скриптом (см. .env.example).
 """
 
@@ -18,3 +18,7 @@ AMO_TOKEN  = os.environ.get("AMO_TOKEN", "")   # долгосрочный ток
 
 META_TOKEN    = os.environ.get("META_TOKEN", "")      # токен Meta Marketing API
 AD_ACCOUNT_ID = os.environ.get("AD_ACCOUNT_ID", "")   # id рекламного аккаунта (с act_ или без)
+
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")   # id Google-таблицы (из URL)
+# Путь к JSON-ключу сервисного аккаунта. Файл держать ВНЕ репозитория.
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
