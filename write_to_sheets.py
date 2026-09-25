@@ -10,6 +10,8 @@ meta_daily и crm_daily, затем пересобирает лист «Скво
   python write_to_sheets.py                         # вчера (по Бишкеку)
   python write_to_sheets.py 2026-09-20              # конкретный день
   python write_to_sheets.py 2026-09-01 2026-09-23   # диапазон (дозаливка)
+
+Часовой запуск (сегодня и вчера, с уведомлением о сбое) — run_hourly.py.
 """
 
 import logging
@@ -23,17 +25,23 @@ from sheets_client import (META_SHEET, CRM_SHEET, get_client, open_spreadsheet,
                            write_meta_rows, write_crm_row)
 
 
+def today_bishkek() -> date:
+    return datetime.now(timezone(timedelta(hours=TZ_OFFSET_HOURS))).date()
+
+
 def yesterday_bishkek() -> date:
-    return datetime.now(timezone(timedelta(hours=TZ_OFFSET_HOURS))).date() - timedelta(days=1)
+    return today_bishkek() - timedelta(days=1)
 
 
-def main():
-    logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
-                        level=logging.WARNING)
-    args = sys.argv[1:]
-    d_from = date.fromisoformat(args[0]) if args else yesterday_bishkek()
-    d_to = date.fromisoformat(args[1]) if len(args) > 1 else d_from
-
+def write_days(d_from: date, d_to: date) -> int:
+    """
+    Пишет дни [d_from, d_to] и пересобирает листы затронутых месяцев.
+    Каждый день сначала целиком собирается (Meta и CRM), потом пишется:
+    сбой API на середине дня не оставит в таблице полдня.
+    -> число запросов к Google API.
+    """
+    if d_from > d_to:
+        raise ValueError(f"Начало диапазона {d_from} позже конца {d_to}")
     client = get_client()
     spreadsheet = open_spreadsheet(client)
 
@@ -54,8 +62,18 @@ def main():
     for year, month in months:
         info = rebuild_month_sheet(year, month, spreadsheet)
         print(f"Лист «{info['title']}» пересобран: дней {info['days']}, "
-              f"строк объявлений {info['ad_rows']}, всего строк {info['rows']}")
-    print(f"Запросов к Google API: {client.request_count}")
+              f"строк объявлений {info['ad_rows']}, всего строк {info['rows']}", flush=True)
+    print(f"Запросов к Google API: {client.request_count}", flush=True)
+    return client.request_count
+
+
+def main():
+    logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s",
+                        level=logging.WARNING)
+    args = sys.argv[1:]
+    d_from = date.fromisoformat(args[0]) if args else yesterday_bishkek()
+    d_to = date.fromisoformat(args[1]) if len(args) > 1 else d_from
+    write_days(d_from, d_to)
 
 
 if __name__ == "__main__":

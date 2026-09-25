@@ -1,7 +1,8 @@
 """
 config.py — переменные окружения jarvis-sheet.
 
-AmoCRM, Meta Marketing API и Google Sheets, без Telegram.
+AmoCRM, Meta Marketing API, Google Sheets и (необязательно) бот для
+уведомлений о сбоях.
 Локально значения можно положить в .env рядом со скриптом (см. .env.example).
 """
 
@@ -20,5 +21,13 @@ META_TOKEN    = os.environ.get("META_TOKEN", "")      # токен Meta Marketin
 AD_ACCOUNT_ID = os.environ.get("AD_ACCOUNT_ID", "")   # id рекламного аккаунта (с act_ или без)
 
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")   # id Google-таблицы (из URL)
-# Путь к JSON-ключу сервисного аккаунта. Файл держать ВНЕ репозитория.
+# Путь к JSON-ключу сервисного аккаунта (файл держать ВНЕ репозитория)
+# или содержимое ключа целиком — так на Railway.
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+
+# Уведомления о сбоях часового запуска (необязательно).
+# ALERT_CHAT_IDS — chat_id через запятую; каждый получатель должен
+# сначала написать боту /start, иначе Telegram не даст ему писать.
+ALERT_BOT_TOKEN = os.environ.get("ALERT_BOT_TOKEN", "")
+ALERT_CHAT_IDS  = [c.strip() for c in os.environ.get("ALERT_CHAT_IDS", "").split(",")
+                   if c.strip()]

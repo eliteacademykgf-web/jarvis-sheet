@@ -1,5 +1,7 @@
 .env
 *.json
+# конфиг деплоя Railway — не секрет, должен быть в репозитории
+!railway.json
 __pycache__/
 *.py[cod]
 .venv/
