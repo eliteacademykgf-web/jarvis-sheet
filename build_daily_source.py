@@ -12,7 +12,7 @@ CRM нельзя разнести по объявлениям: поле кодо
 from datetime import date as date_cls
 
 from config import META_TOKEN, AD_ACCOUNT_ID
-from meta_client import get_daily_ad_stats
+from meta_client import get_account_today, get_daily_ad_stats
 from metrics import compute_daily_metrics
 
 # Не для формул: чтобы при экспорте/отладке было видно, почему цифра общая.
@@ -22,10 +22,13 @@ CRM_NOTE = "Разбивка по объявлениям недоступна: �
 def build_meta_rows(date: date_cls) -> list:
     """
     Строки объявление × день из Meta (get_daily_ad_stats как есть).
-    День — в часовом поясе рекламного аккаунта.
+    День — в часовом поясе рекламного аккаунта. День, который для аккаунта
+    ещё не начался (ночью по Бишкеку), даёт пустой список без запроса insights.
     """
     if not META_TOKEN or not AD_ACCOUNT_ID:
         raise RuntimeError("Нужны META_TOKEN и AD_ACCOUNT_ID в .env или окружении")
+    if date > get_account_today(AD_ACCOUNT_ID, META_TOKEN):
+        return []
     return get_daily_ad_stats(AD_ACCOUNT_ID, date, META_TOKEN)
 
 

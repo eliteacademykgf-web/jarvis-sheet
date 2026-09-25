@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import requests
@@ -159,6 +160,18 @@ def get_ad_insights(ad_account_id: str, date_from: str, date_to: str,
         url = _strip_token(url)
         params = None  # в paging.next уже все параметры
     raise MetaAPIError(f"Meta API: больше {MAX_PAGES} страниц insights, прервано")
+
+
+def get_account_today(ad_account_id: str, access_token: str):
+    """
+    Сегодняшняя дата в часовом поясе рекламного аккаунта (сейчас Москва).
+    Часовой запуск берёт «сегодня» по Бишкеку, а с 00:00 до 03:00 по
+    Бишкеку этот день для аккаунта ещё не начался.
+    """
+    acc = ad_account_id if str(ad_account_id).startswith("act_") else f"act_{ad_account_id}"
+    data = _get(f"{GRAPH_URL}/{acc}", {"fields": "timezone_offset_hours_utc"}, access_token)
+    offset = _num(data.get("timezone_offset_hours_utc"), float)
+    return datetime.now(timezone(timedelta(hours=offset))).date()
 
 
 # ============================================================
