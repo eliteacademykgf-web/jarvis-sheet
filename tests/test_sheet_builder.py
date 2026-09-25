@@ -68,6 +68,14 @@ def test_month_row_sums_meetings(built):
     assert _v(top[sb.I]) == "=IFERROR(U1/G1)"
 
 
+def test_date_vertical_only_in_tall_blocks():
+    assert sb._date_fmt(15)["textRotation"] == {"angle": 90}
+    assert sb._date_fmt(15)["textFormat"]["fontSize"] == 32
+    short = sb._date_fmt(1)
+    assert "textRotation" not in short and short["textFormat"]["fontSize"] == 14
+    assert short["numberFormat"] == sb.DATE
+
+
 def test_rows_have_all_columns(built):
     rows, _, _ = built
     assert all(len(r) == sb.N_COLS for r in rows)

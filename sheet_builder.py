@@ -134,6 +134,22 @@ def _fmt(col=None, *, font="Nunito", size=14, bold=False, italic=False,
     return f
 
 
+# Дата блока, как в шаблоне, — крупно и вертикально на всю высоту блока.
+# «01.09.2026» кеглем 32 по вертикали — около 210 px, это 6 строк объявлений
+# (H_AD = 35). В блоке короче она обрезалась бы — там дата горизонтально, мельче.
+DATE_VERTICAL_MIN_ROWS = 6
+
+
+def _date_fmt(block_rows: int) -> dict:
+    if block_rows >= DATE_VERTICAL_MIN_ROWS:
+        f = _fmt(size=32, bold=True, color=BLUE_TEXT, v="MIDDLE", num=False)
+        f["textRotation"] = {"angle": 90}
+    else:
+        f = _fmt(size=14, bold=True, color=BLUE_TEXT, v="MIDDLE", num=False)
+    f["numberFormat"] = DATE
+    return f
+
+
 def _value(x) -> dict:
     if x is None or x == "":
         return {}
@@ -246,10 +262,7 @@ def _build(meta: dict, crm: dict, manual: dict):
         for i, ad in enumerate(ads):
             row = [_cell(None, _fmt(col)) for col in range(N_COLS)]
             if i == 0:
-                row[A] = _cell(_serial(date.fromisoformat(day)), {
-                    **_fmt(size=32, bold=True, color=BLUE_TEXT, v="MIDDLE", wrap=True,
-                           num=False),
-                    "numberFormat": DATE})
+                row[A] = _cell(_serial(date.fromisoformat(day)), _date_fmt(len(ads)))
                 row[K] = _cell(c.get("new_request"), _fmt(K, v="MIDDLE"))
                 row[L] = _cell(_div(f"F{t}", f"K{s}"), _fmt(L, v="MIDDLE"))
                 row[M] = _cell(c.get("lead"), _fmt(M, v="MIDDLE"))
