@@ -3,7 +3,9 @@
 Данные для таблицы сквозной аналитики: CRM-метрики за день из AmoCRM
 и статистика объявлений по дням из Meta Marketing API.
 Пишет сырые данные в Google Sheets (листы `meta_daily` и `crm_daily`) и собирает из них лист «Сквозная аналитика <Месяц>».
-На Railway запускается кроном раз в час (`run_hourly.py`), о сбоях пишет в Telegram.
+Обновляет таблицу раз в час (`run_hourly.py`), о сбоях пишет в Telegram.
+Основной вариант — офисный ПК заказчика (`run_loop.py`, инструкция —
+[OFFICE-PC.md](OFFICE-PC.md)); запасной — крон Railway (раздел ниже).
 
 ## Файлы
 
@@ -11,6 +13,11 @@
 - `amo_client.py`: запросы к AmoCRM. Перенесено из `jarvis-amo/main.py`; отличие — ошибки API не глотаются (`AmoAPIError`), см. ниже.
 - `run_hourly.py`: часовое обновление — вчера и сегодня; при сбое уведомление и код выхода 1.
 - `alerts.py`: уведомление о сбое в Telegram (токены вырезаются из текста).
+- `run_loop.py`: цикл для офисного ПК — `run_hourly.py` при старте и каждый час
+  в :05, каждый раз новым процессом; второй экземпляр не стартует; лог в `logs/`.
+- `start-sheet.bat`, `install-autostart.bat`, `uninstall-autostart.bat`,
+  `update-sheet.bat`: запуск, автозапуск и обновление на офисном ПК (Windows,
+  без прав администратора). Только ASCII и CRLF (`.gitattributes`).
 - `railway.json`: крон Railway `5 * * * *` (каждый час в :05 UTC).
 - `tests/`: тесты без сети (`pytest`).
 - `metrics.py`: `compute_daily_metrics(date, pipeline_id)`, одна сводка CRM на день без разбивки по объявлениям.
@@ -90,8 +97,10 @@ pip install -r requirements-dev.txt && python -m pytest   # тесты
 
 ## Google Sheets
 
-- Сервисный аккаунт. `GOOGLE_SERVICE_ACCOUNT_JSON` — путь к JSON-ключу (локально,
-  файл вне репозитория) или содержимое ключа целиком (Railway, где файлов нет).
+- Сервисный аккаунт. `GOOGLE_SERVICE_ACCOUNT_JSON` — путь к JSON-ключу или
+  содержимое ключа целиком (Railway, где файлов нет). Относительный путь
+  считается от папки `jarvis-sheet` (на офисном ПК — `google-key.json` рядом
+  со скриптом; в git не попадёт, `*.json` в `.gitignore`).
   Аккаунт должен быть редактором таблицы, иначе
   `SheetsAccessError` («Нет доступа к таблице …»).
 - Скрипт трогает только свои листы `meta_daily` и `crm_daily`. Если листа нет,
@@ -137,7 +146,13 @@ pip install -r requirements-dev.txt && python -m pytest   # тесты
 - Формулы без разделителей аргументов (`+`, `/`, `IFERROR` с одним
   аргументом): у таблицы локаль ru_RU.
 
-## Деплой на Railway
+## Офисный ПК
+
+Пошагово — в [OFFICE-PC.md](OFFICE-PC.md). Коротко: код в
+`D:\jarvis-meta`, в `jarvis-sheet` положить `.env` и `google-key.json`,
+запустить `start-sheet.bat`, затем `install-autostart.bat`.
+
+## Деплой на Railway (запасной вариант)
 
 1. **Сначала на копии таблицы.** Google Sheets → Файл → Создать копию, дать
    сервисному аккаунту (`client_email` из JSON-ключа) роль «Редактор»,

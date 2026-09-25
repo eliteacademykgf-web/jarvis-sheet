@@ -8,9 +8,11 @@ AmoCRM, Meta Marketing API, Google Sheets и (необязательно) бот
 
 import os
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    load_dotenv(os.path.join(HERE, ".env"))
 except ImportError:
     pass
 
@@ -21,9 +23,13 @@ META_TOKEN    = os.environ.get("META_TOKEN", "")      # токен Meta Marketin
 AD_ACCOUNT_ID = os.environ.get("AD_ACCOUNT_ID", "")   # id рекламного аккаунта (с act_ или без)
 
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")   # id Google-таблицы (из URL)
-# Путь к JSON-ключу сервисного аккаунта (файл держать ВНЕ репозитория)
-# или содержимое ключа целиком — так на Railway.
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+# Путь к JSON-ключу сервисного аккаунта или содержимое ключа целиком (Railway).
+# Относительный путь считается от папки jarvis-sheet: на офисном ПК ключ
+# лежит рядом (google-key.json), в git не попадает — *.json в .gitignore.
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+if GOOGLE_SERVICE_ACCOUNT_JSON and not GOOGLE_SERVICE_ACCOUNT_JSON.startswith("{") \
+        and not os.path.isabs(GOOGLE_SERVICE_ACCOUNT_JSON):
+    GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(HERE, GOOGLE_SERVICE_ACCOUNT_JSON)
 
 # Уведомления о сбоях часового запуска (необязательно).
 # ALERT_CHAT_IDS — chat_id через запятую; каждый получатель должен
