@@ -13,8 +13,10 @@
 - `amo_client.py`: запросы к AmoCRM. Перенесено из `jarvis-amo/main.py`; отличие — ошибки API не глотаются (`AmoAPIError`), см. ниже.
 - `run_hourly.py`: часовое обновление — вчера и сегодня; при сбое уведомление и код выхода 1.
 - `alerts.py`: уведомление о сбое в Telegram (токены вырезаются из текста).
-- `run_loop.py`: цикл для офисного ПК — `run_hourly.py` при старте и каждый час
-  в :05, каждый раз новым процессом; второй экземпляр не стартует; лог в `logs/`.
+- `run_loop.py`: цикл для офисного ПК — `git pull` и `run_hourly.py` при старте
+  и каждый час в :05, каждый раз новым процессом; если обновился сам цикл —
+  выход с кодом 3 и перезапуск из `start-sheet.bat`; второй экземпляр не
+  стартует; лог в `logs/`.
 - `start-sheet.bat`, `install-autostart.bat`, `uninstall-autostart.bat`,
   `update-sheet.bat`: запуск, автозапуск и обновление на офисном ПК (Windows,
   без прав администратора). Только ASCII и CRLF (`.gitattributes`).
@@ -153,8 +155,10 @@ E — статус) подставляются в `ads_manual` для объяв
 ## Офисный ПК
 
 Пошагово — в [OFFICE-PC.md](OFFICE-PC.md). Коротко: код в
-`D:\jarvis-meta`, в `jarvis-sheet` положить `.env` и `google-key.json`,
-запустить `start-sheet.bat`, затем `install-autostart.bat`.
+`D:\jarvis-sheet` (клон `eliteacademykgf-web/jarvis-sheet`), рядом положить
+`.env` и `google-key.json`, запустить `start-sheet.bat`, затем
+`install-autostart.bat`. Код обновляется сам: `run_loop.py` делает
+`git pull` перед каждым прогоном.
 
 ## Деплой на Railway (запасной вариант)
 

@@ -40,6 +40,8 @@ goto nopython
 REM Install packages only when missing - pip without internet is slow.
 %PY% -c "import gspread, google.oauth2, dotenv, requests" >nul 2>&1
 if not errorlevel 1 goto loop
+
+:install
 echo   Installing packages (requirements.txt)...
 %PY% -m pip install --disable-pip-version-check -q -r requirements.txt
 %PY% -c "import gspread, google.oauth2, dotenv, requests" >nul 2>&1
@@ -47,6 +49,9 @@ if errorlevel 1 goto badpip
 
 :loop
 %PY% run_loop.py
+REM Exit code 3 = new code arrived from GitHub (run_loop.py pulled it):
+REM re-check packages and start again with the new code
+if "%errorlevel%"=="3" goto install
 if errorlevel 1 pause
 goto :eof
 
