@@ -5,10 +5,11 @@ sheets_client.py — запись сырых данных в Google Sheets.
 если нет, и пишет в них. Существующие листы таблицы никогда не удаляет,
 не переименовывает и не меняет.
 
-Авторизация — сервисный аккаунт, JSON-ключ по пути
-GOOGLE_SERVICE_ACCOUNT_JSON (файл лежит вне репозитория).
+Авторизация — сервисный аккаунт: GOOGLE_SERVICE_ACCOUNT_JSON содержит путь
+к JSON-ключу (файл вне репозитория) или сам ключ целиком (Railway).
 """
 
+import json
 from contextlib import contextmanager
 from http import HTTPStatus
 from typing import List, Optional, Tuple
@@ -63,16 +64,32 @@ ADS_MANUAL_SHEET = "ads_manual"
 ADS_MANUAL_HEADERS = ["ad_id", "ad_name", "code_word", "status"]
 
 
+def _credentials(value: str) -> Credentials:
+    """
+    GOOGLE_SERVICE_ACCOUNT_JSON — путь к JSON-ключу (локально) или само
+    содержимое ключа (Railway: файлов на сервере нет, ключ кладётся
+    в переменную целиком).
+    """
+    value = (value or "").strip()
+    if not value:
+        raise RuntimeError("Нужен GOOGLE_SERVICE_ACCOUNT_JSON в .env или окружении")
+    if value.startswith("{"):
+        try:
+            info = json.loads(value)
+        except ValueError:
+            raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON: содержимое ключа "
+                               "не читается как JSON") from None
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
+    return Credentials.from_service_account_file(value, scopes=SCOPES)
+
+
 def get_client() -> gspread.Client:
     """
     Авторизованный gspread.Client от имени сервисного аккаунта.
     client.request_count — число HTTP-запросов к Google API через этого
     клиента (для контроля квоты).
     """
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        raise RuntimeError("Нужен GOOGLE_SERVICE_ACCOUNT_JSON в .env или окружении")
-    creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_JSON, scopes=SCOPES)
-    client = gspread.authorize(creds)
+    client = gspread.authorize(_credentials(GOOGLE_SERVICE_ACCOUNT_JSON))
 
     client.request_count = 0
 
