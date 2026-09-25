@@ -20,6 +20,7 @@ sheet_builder.py — пересборка листа «Сквозная анал
 Запуск: python sheet_builder.py 2026-09
 """
 
+import re
 import sys
 from collections import defaultdict
 from datetime import date
@@ -200,12 +201,15 @@ def _check_no_references(spreadsheet: gspread.Spreadsheet, title: str, others: l
     """
     if not others:
         return
+    # ссылка в формуле — 'Название'!A1 (с пробелами имя всегда в кавычках);
+    # «'Сквозная аналитика Сентябрь (вручную)'!A1» ссылкой на этот лист не считается
+    refs = (f"'{title}'!", f"{title}!")
     resp = spreadsheet.values_batch_get([f"'{t}'" for t in others],
                                         params={"valueRenderOption": "FORMULA"})
     for t, vr in zip(others, resp["valueRanges"]):
         for i, row in enumerate(vr.get("values", []), 1):
             for j, v in enumerate(row):
-                if isinstance(v, str) and v.startswith("=") and title in v:
+                if isinstance(v, str) and v.startswith("=") and any(r in v for r in refs):
                     raise RuntimeError(
                         f"Лист «{t}», ячейка {COL[j] if j < N_COLS else j + 1}{i} "
                         f"ссылается на «{title}». Пересборка сломала бы ссылку, "
@@ -321,20 +325,53 @@ def _build(meta: dict, crm: dict, manual: dict):
 _GENERATED_MARKERS = ("T2", "S2")
 
 
-def _check_generated(spreadsheet: gspread.Spreadsheet, title: str):
-    """
-    Существующий лист месяца пересобираем, только если его собрал скрипт
-    (в шапке скрытая колонка ad_id). Лист, который заказчик ведёт вручную,
-    пересборка стёрла бы целиком, вместе с введёнными кодовыми словами.
-    """
+MANUAL_SUFFIX = " (вручную)"
+
+
+def _is_generated(spreadsheet: gspread.Spreadsheet, title: str) -> bool:
+    """Лист собран скриптом: в шапке скрытая колонка ad_id."""
     resp = spreadsheet.values_batch_get([f"'{title}'!{a1}" for a1 in _GENERATED_MARKERS])
-    for vr in resp["valueRanges"]:
-        if (vr.get("values") or [[""]])[0][0] == HEADERS[T]:
-            return
-    raise RuntimeError(
-        f"Лист «{title}» заполнен вручную, а не скриптом. Пересборка стёрла бы "
-        f"его. Переименуйте лист (например, «{title} (вручную)») и перенесите "
-        f"кодовые слова и статусы на лист ads_manual, затем запустите снова")
+    return any((vr.get("values") or [[""]])[0][0] == HEADERS[T]
+               for vr in resp["valueRanges"])
+
+
+def _norm_name(name) -> str:
+    """Название объявления для сравнения: в ручном листе встречаются хвостовые
+    табы и двойные пробелы, которых нет в Meta."""
+    return re.sub(r"\s+", " ", str(name or "")).strip().casefold()
+
+
+def _manual_codes(spreadsheet: gspread.Spreadsheet, title: str) -> dict:
+    """
+    Кодовые слова и статусы с ручного листа (разметка шаблона: B — название
+    объявления, D — кодовое слово, E — статус). -> {название: (код, статус)}.
+    Если объявление встречается в нескольких днях, берётся последнее
+    заполненное значение сверху вниз.
+    """
+    resp = spreadsheet.values_batch_get([f"'{title}'!B3:E"])
+    out = {}
+    for row in resp["valueRanges"][0].get("values", []):
+        row = list(row) + [""] * (4 - len(row))
+        name, code, status = _norm_name(row[0]), str(row[2]).strip(), str(row[3]).strip()
+        if name and (code or status):
+            out[name] = (code, status)
+    return out
+
+
+def _set_aside_manual(spreadsheet: gspread.Spreadsheet, sheet: dict, titles: set) -> str:
+    """
+    Переименовывает ручной лист месяца, ничего в нём не меняя, чтобы на его
+    месте собрать лист скрипта. Формулы, ссылавшиеся на него, Google
+    переписывает на новое имя сам. -> новое название.
+    """
+    title = sheet["properties"]["title"]
+    new, n = title + MANUAL_SUFFIX, 2
+    while new in titles:
+        new, n = f"{title} (вручную {n})", n + 1
+    spreadsheet.batch_update({"requests": [{"updateSheetProperties": {
+        "properties": {"sheetId": sheet["properties"]["sheetId"], "title": new},
+        "fields": "title"}}]})
+    return new
 
 
 def rebuild_month_sheet(year: int, month: int,
@@ -342,9 +379,12 @@ def rebuild_month_sheet(year: int, month: int,
     """
     Пересобирает лист «Сквозная аналитика <Месяц>» из meta_daily, crm_daily
     и ads_manual. Лист месяца создаётся, если его нет. Другие листы не
-    меняются (кроме дописывания новых ad_id в ads_manual). Лист с тем же
-    названием, заполненный вручную, не трогается (_check_generated).
-    -> {"title", "days", "ad_rows", "rows"}
+    меняются (кроме дописывания новых ad_id в ads_manual).
+
+    Лист с тем же названием, заполненный вручную, не стирается: он
+    переименовывается в «… (вручную)», а его кодовые слова и статусы
+    подставляются в ads_manual для новых объявлений (по названию).
+    -> {"title", "days", "ad_rows", "rows", "set_aside"}
     """
     spreadsheet = spreadsheet or open_spreadsheet()
     title = month_sheet_title(year, month)
@@ -353,17 +393,28 @@ def rebuild_month_sheet(year: int, month: int,
         sheets = spreadsheet.fetch_sheet_metadata(params={
             "fields": "sheets(properties(sheetId,title,gridProperties),conditionalFormats)"
         })["sheets"]
+        titles = {s["properties"]["title"] for s in sheets}
         target = next((s for s in sheets if s["properties"]["title"] == title), None)
+        set_aside = None
+        if target is not None and not _is_generated(spreadsheet, title):
+            set_aside = _set_aside_manual(spreadsheet, target, titles)
+            titles.add(set_aside)
+            target = None
         if target is not None:
-            _check_generated(spreadsheet, title)
-        own = {title, META_SHEET, CRM_SHEET}
-        _check_no_references(spreadsheet, title,
-                             [s["properties"]["title"] for s in sheets
-                              if s["properties"]["title"] not in own])
+            own = {title, META_SHEET, CRM_SHEET}
+            _check_no_references(spreadsheet, title,
+                                 [t for t in titles if t not in own])
 
         meta, crm = _load_month(spreadsheet, year, month)
         ads = {str(a["ad_id"]): a["ad_name"] for rows in meta.values() for a in rows}
-        manual = read_ads_manual(spreadsheet, ads)
+        # коды с отложенных ручных листов этого месяца — только для объявлений,
+        # которых ещё нет в ads_manual (существующие строки не меняются)
+        imported = {}
+        for t in sorted(t for t in titles if t.startswith(f"{title} (вручную")):
+            imported.update(_manual_codes(spreadsheet, t))
+        defaults = {ad_id: imported[_norm_name(name)] for ad_id, name in ads.items()
+                    if _norm_name(name) in imported}
+        manual = read_ads_manual(spreadsheet, ads, defaults)
         rows, merges, heights = _build(meta, crm, manual)
 
         if target is None:
@@ -433,7 +484,8 @@ def rebuild_month_sheet(year: int, month: int,
         spreadsheet.batch_update({"requests": requests})
 
     return {"title": title, "days": len(set(meta) | set(crm)),
-            "ad_rows": sum(len(v) for v in meta.values()), "rows": len(rows)}
+            "ad_rows": sum(len(v) for v in meta.values()), "rows": len(rows),
+            "set_aside": set_aside}
 
 
 if __name__ == "__main__":

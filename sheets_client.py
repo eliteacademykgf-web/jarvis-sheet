@@ -191,15 +191,18 @@ def write_crm_row(row: dict,
         return _upsert(ws, CRM_HEADERS, ["date"], [row])
 
 
-def read_ads_manual(spreadsheet: gspread.Spreadsheet, ads: dict) -> dict:
+def read_ads_manual(spreadsheet: gspread.Spreadsheet, ads: dict,
+                    defaults: Optional[dict] = None) -> dict:
     """
     Справочник ads_manual: {ad_id: {"code_word", "status"}}.
 
     ads — {ad_id: ad_name} объявлений, которые сейчас попадут в отчёт.
     Тех, кого в справочнике нет, дописываем в конец строкой
-    (ad_id, ad_name, "", ""), чтобы менеджеру было что заполнить.
-    Существующие строки не меняются.
+    (ad_id, ad_name, code_word, status), чтобы менеджеру было что заполнить.
+    code_word и status берутся из defaults {ad_id: (code_word, status)}
+    (перенос с ручного листа), иначе пустые. Существующие строки не меняются.
     """
+    defaults = defaults or {}
     with _access_errors():
         ws = get_or_create_worksheet(spreadsheet, ADS_MANUAL_SHEET, ADS_MANUAL_HEADERS)
         values = ws.get_all_values()
@@ -211,7 +214,10 @@ def read_ads_manual(spreadsheet: gspread.Spreadsheet, ads: dict) -> dict:
             r = r + [""] * (len(ADS_MANUAL_HEADERS) - len(r))
             if r[0]:
                 manual.setdefault(r[0], {"code_word": r[2], "status": r[3]})
-        missing = [[ad_id, name, "", ""] for ad_id, name in ads.items() if ad_id not in manual]
+        missing = [[ad_id, name, *defaults.get(ad_id, ("", ""))]
+                   for ad_id, name in ads.items() if ad_id not in manual]
         if missing:
             ws.append_rows(missing, value_input_option=ValueInputOption.raw)
+            for ad_id, _name, code_word, status in missing:
+                manual[ad_id] = {"code_word": code_word, "status": status}
     return manual

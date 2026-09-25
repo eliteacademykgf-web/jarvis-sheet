@@ -61,6 +61,9 @@ def write_days(d_from: date, d_to: date) -> int:
 
     for year, month in months:
         info = rebuild_month_sheet(year, month, spreadsheet)
+        if info["set_aside"]:
+            print(f"Ручной лист «{info['title']}» сохранён как «{info['set_aside']}», "
+                  f"его кодовые слова перенесены в ads_manual", flush=True)
         print(f"Лист «{info['title']}» пересобран: дней {info['days']}, "
               f"строк объявлений {info['ad_rows']}, всего строк {info['rows']}", flush=True)
     print(f"Запросов к Google API: {client.request_count}", flush=True)
