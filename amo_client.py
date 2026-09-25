@@ -5,7 +5,10 @@ amo_client.py — низкоуровневые запросы к AmoCRM.
 Отличия от оригинала:
   - FIELD_CODE_WORD исправлен на 1145111 (см. комментарий у константы);
   - убраны threading.Lock у кэшей: они защищали общее состояние между
-    хендлерами Telegram-бота, в однопоточном скрипте не нужны.
+    хендлерами Telegram-бота, в однопоточном скрипте не нужны;
+  - ошибки API не глотаются: _amo_get повторяет запрос (сеть, 429, 5xx),
+    а затем поднимает AmoAPIError. Бот в таких случаях получал пустой
+    ответ и показывал нули, а скрипт записал бы их в таблицу.
 """
 
 import logging
@@ -138,24 +141,51 @@ def cache_set(key: str, value, ttl: int = 300):
 # ============================================================
 # AMOCRM — HTTP
 # ============================================================
+class AmoAPIError(RuntimeError):
+    """Ошибка AmoCRM API. Поднимается вместо тихого пустого ответа: иначе
+    в таблицу ушли бы нули поверх правильных данных."""
+
+
+AMO_ATTEMPTS = 4          # всего попыток на один запрос
+AMO_RETRY_WAIT = 3        # сек; растёт вдвое: 3, 6, 12
+
+
 def _amo_get(path: str, params=None) -> dict:
+    """
+    GET к AmoCRM. Пустой ответ ({}) означает только 204 (данных нет).
+    Сеть, 429 и 5xx повторяются до AMO_ATTEMPTS раз, затем AmoAPIError.
+    401 и прочие 4xx — сразу AmoAPIError, без повторов.
+    """
     url = f"https://{AMO_DOMAIN}/api/v4/{path}"
-    try:
-        r = requests.get(url, headers=AMO_HEADERS, params=params or {}, timeout=30)
-        if r.status_code == 401:
-            return {"_error": "Токен AmoCRM истёк или неверный"}
-        if r.status_code == 429:
-            time.sleep(3)
+    problem = ""
+    for attempt in range(1, AMO_ATTEMPTS + 1):
+        wait = AMO_RETRY_WAIT * 2 ** (attempt - 1)
+        try:
             r = requests.get(url, headers=AMO_HEADERS, params=params or {}, timeout=30)
-        if r.status_code == 204:
-            return {}
-        if r.status_code == 200:
-            return r.json()
-        logger.warning(f"AmoCRM {r.status_code} /{path}: {r.text[:200]}")
-        return {}
-    except Exception as e:
-        logger.error(f"AmoCRM /{path}: {e}")
-        return {}
+        except requests.RequestException as e:
+            problem = f"сетевая ошибка {type(e).__name__}"
+        else:
+            if r.status_code == 204:
+                return {}
+            if r.status_code == 200:
+                try:
+                    return r.json()
+                except ValueError:
+                    problem = "ответ не JSON"
+            elif r.status_code == 401:
+                raise AmoAPIError("Токен AmoCRM истёк или неверный (HTTP 401)")
+            elif r.status_code == 429 or r.status_code >= 500:
+                problem = f"HTTP {r.status_code}"
+                try:
+                    wait = max(wait, float(r.headers.get("Retry-After") or 0))
+                except ValueError:
+                    pass
+            else:
+                raise AmoAPIError(f"AmoCRM HTTP {r.status_code} /{path}: {r.text[:200]}")
+        if attempt < AMO_ATTEMPTS:
+            logger.warning(f"AmoCRM /{path}: {problem}, повтор {attempt}/{AMO_ATTEMPTS - 1} через {wait:g} с")
+            time.sleep(wait)
+    raise AmoAPIError(f"AmoCRM /{path}: {problem} после {AMO_ATTEMPTS} попыток")
 
 
 def _amo_get_all(path: str, params=None, limit: int = 250) -> list:
@@ -165,7 +195,7 @@ def _amo_get_all(path: str, params=None, limit: int = 250) -> list:
         p = dict(params or {})
         p["limit"], p["page"] = limit, page
         data = _amo_get(path, p)
-        if not data or "_error" in data:
+        if not data:
             break
         embedded = next(
             (v for v in data.get("_embedded", {}).values() if isinstance(v, list)), []
@@ -338,7 +368,7 @@ def _load_won_events_batch(df: int, dt: int) -> dict:
             "filter[created_at][to]":   dt,
             "limit": 100, "page": page,
         })
-        if not data or "_error" in data:
+        if not data:
             break
         evs = data.get("_embedded", {}).get("events", [])
         if not evs:
@@ -617,7 +647,7 @@ def amo_get_status_history(lead_ids: List[int]) -> Dict[int, list]:
         MAX_PAGES = 50
         while page <= MAX_PAGES:
             data = _amo_get("events", {**params, "limit": 100, "page": page})
-            if not data or "_error" in data:
+            if not data:
                 break
             evs = data.get("_embedded", {}).get("events", [])
             if not evs:
