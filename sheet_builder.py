@@ -6,9 +6,9 @@ sheet_builder.py — пересборка листа «Сквозная анал
   строка 2  — шапка
   дальше    — блоки дней, новые сверху:
                 строка на каждое объявление из meta_daily (по расходу),
-                K–R объединены по высоте блока: CRM одно число на день,
+                K–S объединены по высоте блока: CRM одно число на день,
                 строка «В общем» — итог дня.
-Скрытые колонки: S — ad_id (связь с ads_manual), T — клики (для CTR итогов).
+Скрытые колонки: T — ad_id (связь с ads_manual), U — клики (для CTR итогов).
 
 Всё пишется ОДНИМ spreadsheets.batchUpdate: очистка, значения, форматы,
 объединения, размеры и условное форматирование. Запрос атомарный —
@@ -41,18 +41,20 @@ def month_sheet_title(year: int, month: int) -> str:
 # ============================================================
 # РАЗМЕТКА
 # ============================================================
-(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T) = range(20)
-N_COLS = 20
-COL = "ABCDEFGHIJKLMNOPQRST"
+# Q «Встречи» (консультации проведены) вставлена между «Квал лиды» и «Продажи»
+# по просьбе заказчика; остальные колонки шаблона сдвинуты на одну вправо.
+(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U) = range(21)
+N_COLS = 21
+COL = "ABCDEFGHIJKLMNOPQRSTU"
 
 HEADERS = {
     A: "Название объявления ", D: "Кодовое слово ", E: "Статус ", F: "Рассход ",
     G: "Показы ", H: "CPM ", I: "CTR ", J: "Заявки с FB ", K: "Заявки с AmoCrm",
     L: "Цена за заявку ", M: "Лиды ", N: "CR2 ", O: "Цена лида ", P: "Квал лиды ",
-    Q: "Продажи ", R: "Цена квал лида ", S: "ad_id", T: "clicks",
+    Q: "Встречи ", R: "Продажи ", S: "Цена квал лида ", T: "ad_id", U: "clicks",
 }
-CRM_BLOCK = [K, L, M, N, O, P, Q, R]      # объединяются по высоте блока дня
-SUMMED = [F, G, J, K, M, P, Q, T]         # складываются в итоге месяца
+CRM_BLOCK = [K, L, M, N, O, P, Q, R, S]   # объединяются по высоте блока дня
+SUMMED = [F, G, J, K, M, P, Q, R, U]      # складываются в итоге месяца
 
 USD  = {"type": "NUMBER", "pattern": "$#,##0.00"}
 USD2 = {"type": "NUMBER", "pattern": "[$$]#,##0.00"}
@@ -60,10 +62,10 @@ INT  = {"type": "NUMBER", "pattern": "#,##0"}
 PCT  = {"type": "PERCENT", "pattern": "0.00%"}
 DATE = {"type": "DATE", "pattern": "dd.mm.yyyy"}
 NUM_FORMAT = {F: USD, G: INT, H: USD, I: PCT, J: INT, K: INT, L: USD2, M: INT,
-              N: PCT, O: USD2, P: INT, Q: INT, R: USD2, T: INT}
+              N: PCT, O: USD2, P: INT, Q: INT, R: INT, S: USD2, U: INT}
 
 COL_WIDTHS = [130, 100, 496, 192, 192, 123, 120, 121, 153, 114,
-              158, 153, 123, 131, 107, 135, 135, 130]            # A–R, как в шаблоне
+              158, 153, 123, 131, 107, 135, 135, 135, 130]       # A–S: шаблон + «Встречи»
 H_MONTH, H_HEADER, H_AD, H_TOTAL, H_DEFAULT = 48, 73, 35, 52, 21
 
 BLUE_TEXT  = {"red": 0.07, "green": 0.33, "blue": 0.8}
@@ -79,7 +81,8 @@ def _rgb(red=0, green=0, blue=0):
 
 
 # Условное форматирование — правила из шаблона как есть. Поменяны только
-# диапазоны: L — на все строки данных (было 3–17), R — только R
+# диапазоны: L — на все строки данных (было 3–17), «Цена квал лида» (теперь S,
+# после вставки «Встречи») — только она
 # (было R–Z, а там теперь скрытые ad_id и клики). Числа — с запятой
 # (локаль ru_RU): «0.80%» из шаблона API отвергает как невалидное.
 def _bool_rule(cond_type, values, bg):
@@ -93,10 +96,10 @@ def _bool_rule(cond_type, values, bg):
 COND_RULES = [
     (L, "data", _bool_rule("NUMBER_LESS_THAN_EQ", ["0,8"], _rgb(0.42, 0.66, 0.31))),
     (I, "all",  _bool_rule("NUMBER_GREATER_THAN_EQ", ["1%"], _rgb(0.58, 0.77, 0.49))),
-    (R, "all",  _bool_rule("NUMBER_GREATER_THAN_EQ", ["5"], _rgb(0.88, 0.4, 0.4))),
-    (R, "all",  _bool_rule("NUMBER_LESS_THAN_EQ", ["4,5"], _rgb(0.42, 0.66, 0.31))),
-    (R, "all",  _bool_rule("NUMBER_BETWEEN", ["4,6", "5"], _rgb(1, 0.85, 0.4))),
-    (R, "all",  _bool_rule("NUMBER_GREATER_THAN_EQ", ["7"], _rgb(1))),
+    (S, "all",  _bool_rule("NUMBER_GREATER_THAN_EQ", ["5"], _rgb(0.88, 0.4, 0.4))),
+    (S, "all",  _bool_rule("NUMBER_LESS_THAN_EQ", ["4,5"], _rgb(0.42, 0.66, 0.31))),
+    (S, "all",  _bool_rule("NUMBER_BETWEEN", ["4,6", "5"], _rgb(1, 0.85, 0.4))),
+    (S, "all",  _bool_rule("NUMBER_GREATER_THAN_EQ", ["7"], _rgb(1))),
     (O, "all",  {"gradientRule": {
         "minpoint": {"type": "NUMBER", "value": "1,9",
                      "colorStyle": {"rgbColor": _rgb(0.34, 0.73, 0.54)}},
@@ -218,7 +221,7 @@ def _build(meta: dict, crm: dict, manual: dict):
     листа, merges — (r0, r1, c0, c1) 0-based полуинтервалы,
     row_kinds — тип строки для высоты.
     """
-    rows, merges, kinds = [], [], []
+    merges, kinds = [], []
 
     # строка 2 — шапка (строку 1 соберём в конце, когда известны итоги дней)
     header = []
@@ -249,8 +252,9 @@ def _build(meta: dict, crm: dict, manual: dict):
                 row[N] = _cell(_div(f"M{s}", f"K{s}"), _fmt(N, v="MIDDLE"))
                 row[O] = _cell(_div(f"F{t}", f"M{s}"), _fmt(O, v="MIDDLE"))
                 row[P] = _cell(c.get("qualified"), _fmt(P, v="MIDDLE"))
-                row[Q] = _cell(c.get("sale"), _fmt(Q, v="MIDDLE"))
-                row[R] = _cell(_div(f"F{t}", f"P{s}"), _fmt(R, v="MIDDLE"))
+                row[Q] = _cell(c.get("consult_done"), _fmt(Q, v="MIDDLE"))
+                row[R] = _cell(c.get("sale"), _fmt(R, v="MIDDLE"))
+                row[S] = _cell(_div(f"F{t}", f"P{s}"), _fmt(S, v="MIDDLE"))
             name_fmt = _fmt(h="LEFT", v="MIDDLE", wrap=True, num=False)
             if ad is None:
                 row[B] = _cell("нет данных Meta за день", name_fmt)
@@ -265,8 +269,8 @@ def _build(meta: dict, crm: dict, manual: dict):
                 row[H] = _cell(_num(ad["cpm"]), _fmt(H))
                 row[I] = _cell(_num(ad["ctr"]) / 100, _fmt(I))   # Meta: 0.577 = 0.577%
                 row[J] = _cell(_num(ad["dm_leads"]), _fmt(J))
-                row[S] = _cell(ad_id, _fmt(num=False))
-                row[T] = _cell(_num(ad["clicks"]), _fmt(T))
+                row[T] = _cell(ad_id, _fmt(num=False))
+                row[U] = _cell(_num(ad["clicks"]), _fmt(U))
             row[C] = _cell(None, name_fmt)
             body.append(row)
             kinds.append(H_AD)
@@ -280,11 +284,11 @@ def _build(meta: dict, crm: dict, manual: dict):
         # итог дня
         tot = {
             F: f"=SUM(F{s}:F{e})", G: f"=SUM(G{s}:G{e})",
-            H: _div(f"F{t}", f"G{t}", "*1000"), I: _div(f"T{t}", f"G{t}"),
+            H: _div(f"F{t}", f"G{t}", "*1000"), I: _div(f"U{t}", f"G{t}"),
             J: f"=SUM(J{s}:J{e})", K: f"=K{s}", L: _div(f"F{t}", f"K{t}"),
             M: f"=M{s}", N: _div(f"M{t}", f"K{t}"), O: _div(f"F{t}", f"M{t}"),
-            P: f"=P{s}", Q: f"=Q{s}", R: _div(f"F{t}", f"P{t}"),
-            T: f"=SUM(T{s}:T{e})",
+            P: f"=P{s}", Q: f"=Q{s}", R: f"=R{s}", S: _div(f"F{t}", f"P{t}"),
+            U: f"=SUM(U{s}:U{e})",
         }
         row = [_cell(tot.get(col), _fmt(col, bg=TOTAL_BG)) for col in range(N_COLS)]
         row[A] = _cell("В общем", _fmt(size=21, bold=True, bg=TOTAL_BG, wrap=True, num=False))
@@ -299,8 +303,8 @@ def _build(meta: dict, crm: dict, manual: dict):
     for col in SUMMED:
         month[col] = "=" + "+".join(f"{COL[col]}{t}" for t in total_rows) if total_rows else 0
     month.update({
-        H: _div("F1", "G1", "*1000"), I: _div("T1", "G1"), L: _div("F1", "K1"),
-        N: _div("M1", "K1"), O: _div("F1", "M1"), R: _div("F1", "P1"),
+        H: _div("F1", "G1", "*1000"), I: _div("U1", "G1"), L: _div("F1", "K1"),
+        N: _div("M1", "K1"), O: _div("F1", "M1"), S: _div("F1", "P1"),
     })
     top = [_cell(month.get(col), _fmt(col, font="Arial", size=19, bold=True, italic=True,
                                       v="MIDDLE", wrap=True))
@@ -312,12 +316,34 @@ def _build(meta: dict, crm: dict, manual: dict):
     return [top, header] + body, merges, [H_MONTH, H_HEADER] + kinds
 
 
+# Скрытая служебная колонка шапки: по ней видно, что лист собран скриптом.
+# S2 — так было до вставки «Встречи»; такие листы тоже наши.
+_GENERATED_MARKERS = ("T2", "S2")
+
+
+def _check_generated(spreadsheet: gspread.Spreadsheet, title: str):
+    """
+    Существующий лист месяца пересобираем, только если его собрал скрипт
+    (в шапке скрытая колонка ad_id). Лист, который заказчик ведёт вручную,
+    пересборка стёрла бы целиком, вместе с введёнными кодовыми словами.
+    """
+    resp = spreadsheet.values_batch_get([f"'{title}'!{a1}" for a1 in _GENERATED_MARKERS])
+    for vr in resp["valueRanges"]:
+        if (vr.get("values") or [[""]])[0][0] == HEADERS[T]:
+            return
+    raise RuntimeError(
+        f"Лист «{title}» заполнен вручную, а не скриптом. Пересборка стёрла бы "
+        f"его. Переименуйте лист (например, «{title} (вручную)») и перенесите "
+        f"кодовые слова и статусы на лист ads_manual, затем запустите снова")
+
+
 def rebuild_month_sheet(year: int, month: int,
                         spreadsheet: gspread.Spreadsheet = None) -> dict:
     """
     Пересобирает лист «Сквозная аналитика <Месяц>» из meta_daily, crm_daily
     и ads_manual. Лист месяца создаётся, если его нет. Другие листы не
-    меняются (кроме дописывания новых ad_id в ads_manual).
+    меняются (кроме дописывания новых ad_id в ads_manual). Лист с тем же
+    названием, заполненный вручную, не трогается (_check_generated).
     -> {"title", "days", "ad_rows", "rows"}
     """
     spreadsheet = spreadsheet or open_spreadsheet()
@@ -328,6 +354,8 @@ def rebuild_month_sheet(year: int, month: int,
             "fields": "sheets(properties(sheetId,title,gridProperties),conditionalFormats)"
         })["sheets"]
         target = next((s for s in sheets if s["properties"]["title"] == title), None)
+        if target is not None:
+            _check_generated(spreadsheet, title)
         own = {title, META_SHEET, CRM_SHEET}
         _check_no_references(spreadsheet, title,
                              [s["properties"]["title"] for s in sheets
@@ -383,7 +411,7 @@ def rebuild_month_sheet(year: int, month: int,
 
         requests += [dim("COLUMNS", i, i + 1, {"pixelSize": w, "hiddenByUser": False},
                          "pixelSize,hiddenByUser") for i, w in enumerate(COL_WIDTHS)]
-        requests.append(dim("COLUMNS", S, T + 1, {"hiddenByUser": True}, "hiddenByUser"))
+        requests.append(dim("COLUMNS", T, U + 1, {"hiddenByUser": True}, "hiddenByUser"))
         i = 0
         while i < len(heights):                    # подряд идущие одинаковые высоты
             j = i
