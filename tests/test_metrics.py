@@ -20,11 +20,11 @@ STATUSES = [
 SORT = {sid: s for sid, s in STATUSES}
 
 
-def test_normalize_code_word():
-    assert metrics.normalize_code_word("ГЕРМАНИЯ  🤍") == "германия"
-    assert metrics.normalize_code_word("  ИТАЛИЯ 🔥 ") == "италия"
-    assert metrics.normalize_code_word("➕➕➕") == "➕➕➕"
-    assert metrics.normalize_code_word(None) == ""
+def test_code_key_keeps_emoji_ignores_case_and_spaces():
+    assert metrics.code_key("АКШ  🌟") == metrics.code_key(" акш 🌟 ")
+    assert metrics.code_key("ИТАЛИЯ 💚") != metrics.code_key("ИТАЛИЯ 🌟")
+    assert metrics.code_key("ИТАЛИЯ ❤️") == metrics.code_key("италия ❤")
+    assert metrics.code_key(None) == ""
 
 
 def test_open_lead_uses_current_status():
@@ -83,6 +83,32 @@ def test_daily_metrics_are_cumulative(amo):
     assert m["qualified"] == 4
     assert m["consult_scheduled"] == 3
     assert m["consult_done"] == 3      # 4 (дожим), 5 (отказ после встречи), 6 (продажа)
+
+
+def _with_word(lead: dict, word: str) -> dict:
+    return {**lead, "_contact_custom_fields": [
+        {"field_id": metrics.FIELD_CODE_WORD, "values": [{"value": word}]}]}
+
+
+def test_breakdown_by_code_word_sums_to_total(amo):
+    day = date(2026, 9, 20)
+    df, _ = metrics.day_bounds(day)
+    amo["cohort"] = [
+        _with_word({"id": 1, "status_id": 76732870}, "ИТАЛИЯ 💚"),     # квал
+        _with_word({"id": 2, "status_id": 76732734}, "италия  💚"),    # то же слово
+        _with_word({"id": 3, "status_id": 76732882}, "США 🔥"),        # встреча
+        {"id": 4, "status_id": 76732738},                              # без слова
+    ]
+    amo["won"] = [_with_word({"id": 3, "price": 700}, "США 🔥")]
+    amo["history"] = {3: [(df + 5, [], [(PREPAY_STATUS_ID, P)])]}
+    total, by_code = metrics.compute_daily_breakdown(day)
+
+    it, us, none = (by_code[metrics.code_key(w)] for w in ("ИТАЛИЯ 💚", "США 🔥", ""))
+    assert (it["new_request"], it["qualified"], it["code_word"]) == (2, 1, "ИТАЛИЯ 💚")
+    assert (us["consult_done"], us["sale"], us["revenue"]) == (1, 1, 700)
+    assert none["new_request"] == 1 and none["lead"] == 1
+    for m in metrics.METRIC_KEYS:
+        assert total[m] == sum(b[m] for b in by_code.values())
 
 
 def test_sale_counted_once_on_first_event(amo):

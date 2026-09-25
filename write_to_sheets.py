@@ -1,8 +1,8 @@
 """
 write_to_sheets.py — запись данных за день (или диапазон дней) в Google Sheets.
 
-Собирает build_meta_rows и build_crm_row, пишет upsert'ом на листы
-meta_daily и crm_daily, затем пересобирает лист «Сквозная аналитика
+Собирает build_meta_rows и build_crm, пишет upsert'ом на листы
+meta_daily, crm_daily и crm_by_code, затем пересобирает лист «Сквозная аналитика
 <Месяц>» за каждый затронутый месяц (sheet_builder.rebuild_month_sheet).
 Повторный запуск за тот же день обновляет строки на месте.
 
@@ -19,10 +19,10 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 
 from amo_client import TZ_OFFSET_HOURS
-from build_daily_source import build_meta_rows, build_crm_row
+from build_daily_source import build_meta_rows, build_crm
 from sheet_builder import rebuild_month_sheet
 from sheets_client import (META_SHEET, CRM_SHEET, get_client, open_spreadsheet,
-                           write_meta_rows, write_crm_row)
+                           write_meta_rows, write_crm_row, write_crm_code_rows)
 
 
 def today_bishkek() -> date:
@@ -49,9 +49,10 @@ def write_days(d_from: date, d_to: date) -> int:
     d = d_from
     while d <= d_to:
         meta_rows = build_meta_rows(d)
-        crm_row = build_crm_row(d)
+        crm_row, code_rows = build_crm(d)
         m_ins, m_upd = write_meta_rows(meta_rows, spreadsheet)
         c_ins, c_upd = write_crm_row(crm_row, spreadsheet)
+        write_crm_code_rows(d.isoformat(), code_rows, spreadsheet)
         print(f"{d.isoformat()}  {META_SHEET}: +{m_ins} / обновлено {m_upd} "
               f"(из Meta {len(meta_rows)});  {CRM_SHEET}: +{c_ins} / обновлено {c_upd}",
               flush=True)

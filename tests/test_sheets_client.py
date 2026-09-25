@@ -35,6 +35,22 @@ def test_upsert_updates_existing_and_appends_new():
     assert {"range": "A4:B4", "values": [["2026-09-21", 7]]} in ws.updates
 
 
+def test_replace_scope_zeroes_codes_gone_from_the_day():
+    headers = ["date", "code_key", "code_word", "new_request"]
+    ws = FakeWorksheet([headers,
+                        ["2026-09-20", "италия 🔥", "ИТАЛИЯ 🔥", "5"],
+                        ["2026-09-20", "сша 💚", "США 💚", "4"],
+                        ["2026-09-21", "сша 💚", "США 💚", "9"]])
+    sc._upsert(ws, headers, ["date", "code_key"],
+               [{"date": "2026-09-20", "code_key": "италия 🔥", "code_word": "ИТАЛИЯ 🔥",
+                 "new_request": 6}],
+               replace_scope=("date", "2026-09-20"))
+    assert {"range": "A2:D2", "values": [["2026-09-20", "италия 🔥", "ИТАЛИЯ 🔥", 6]]} in ws.updates
+    # пропавшее слово того же дня обнулено, другой день не тронут
+    assert {"range": "A3:D3", "values": [["2026-09-20", "сша 💚", "США 💚", 0]]} in ws.updates
+    assert not any(u["range"] == "A4:D4" for u in ws.updates)
+
+
 def test_upsert_refuses_foreign_header():
     ws = FakeWorksheet([["что-то", "другое"]])
     with pytest.raises(RuntimeError, match="первая строка"):

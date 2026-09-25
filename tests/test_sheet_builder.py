@@ -44,7 +44,7 @@ def test_day_block_values(built):
     assert _v(first[sb.P]) == 5
     assert _v(first[sb.Q]) == 3
     assert _v(first[sb.R]) == 1
-    assert _v(first[sb.S]) == "=IFERROR(F5/P3)"
+    assert _v(first[sb.S]) == "=IFERROR(SUM(F3:F4)/P3)"
     # код и статус из ads_manual
     assert _v(second[sb.D]) == "ИТАЛИЯ 🔥"
     # CTR: 0.5% из Meta → 0.005 на листе
@@ -52,9 +52,9 @@ def test_day_block_values(built):
     # CRM-колонки объединены по высоте блока, включая «Встречи»
     for col in sb.CRM_BLOCK:
         assert (2, 4, col, col + 1) in merges
-    # итог дня
-    assert _v(total[sb.Q]) == "=Q3"
-    assert _v(total[sb.R]) == "=R3"
+    # итог дня — сумма по блоку (в объединённой ячейке число только в верхней)
+    assert _v(total[sb.Q]) == "=SUM(Q3:Q4)"
+    assert _v(total[sb.R]) == "=SUM(R3:R4)"
     assert _v(total[sb.I]) == "=IFERROR(U5/G5)"
     assert _v(total[sb.U]) == "=SUM(U3:U4)"
 
@@ -66,6 +66,53 @@ def test_month_row_sums_meetings(built):
     assert _v(top[sb.R]) == "=R5"
     assert _v(top[sb.S]) == "=IFERROR(F1/P1)"
     assert _v(top[sb.I]) == "=IFERROR(U1/G1)"
+
+
+def _code(key_word, **m):
+    from metrics import code_key
+    return code_key(key_word), {"code_word": key_word, **{k: 0 for k in sb.CRM_METRICS}, **m}
+
+
+def test_without_code_words_layout_is_one_number_per_day():
+    codes = {"2026-09-20": dict([_code("", new_request=12, lead=9, qualified=5)])}
+    rows, merges, _ = sb._build(META, CRM, MANUAL, codes)
+    assert len(rows) == 5                                  # 2 объявления + итог
+    assert _v(rows[2][sb.K]) == 12 and (2, 4, sb.K, sb.K + 1) in merges
+
+
+def test_code_words_split_crm_by_ad_groups():
+    manual = {"111": {"code_word": "ИТАЛИЯ 🔥", "status": "Активно"},
+              "222": {"code_word": "США 💚", "status": "Активно"}}
+    codes = {"2026-09-20": dict([
+        _code("италия  🔥", new_request=5, lead=4, qualified=3, consult_done=2, sale=1),
+        _code("США 💚", new_request=4, lead=3, qualified=1),
+        _code("КИТАЙ 🔥", new_request=1),                  # кода нет ни у одного объявления
+        _code("", new_request=2, lead=1),                  # без кодового слова
+    ])}
+    rows, merges, _ = sb._build(META, CRM, manual, codes)
+    usa, italy, rest, total = rows[2], rows[3], rows[4], rows[5]
+    # группы по убыванию расхода: США (222, $30) выше Италии (111, $10)
+    assert _v(usa[sb.B]) == "Объявление B" and _v(usa[sb.K]) == 4 and _v(usa[sb.P]) == 1
+    assert _v(italy[sb.K]) == 5 and _v(italy[sb.Q]) == 2 and _v(italy[sb.R]) == 1
+    assert _v(italy[sb.S]) == "=IFERROR(SUM(F4:F4)/P4)"
+    # остаток: без слова + слово без объявлений; цен нет — у строки нет расхода
+    assert "без кодового слова" in _v(rest[sb.B]) and "КИТАЙ 🔥" in _v(rest[sb.B])
+    assert _v(rest[sb.K]) == 3 and _v(rest[sb.M]) == 1
+    assert _v(rest[sb.L]) is None and _v(rest[sb.S]) is None
+    # итог дня — сумма всех строк блока: 4 + 5 + 3 = 12 = заявок за день
+    assert _v(total[sb.K]) == "=SUM(K3:K5)"
+    assert (2, 5, sb.A, sb.A + 1) in merges                # дата на весь блок
+    assert (2, 3, sb.K, sb.K + 1) not in merges            # группы по одной строке
+
+
+def test_ad_without_matching_code_has_no_crm_cells():
+    manual = {"111": {"code_word": "ИТАЛИЯ 🔥"}, "222": {"code_word": ""}}
+    codes = {"2026-09-20": dict([_code("ИТАЛИЯ 🔥", new_request=5), _code("", new_request=7)])}
+    rows, _, _ = sb._build(META, CRM, manual, codes)
+    names = [_v(r[sb.B]) for r in rows[2:5]]
+    assert names[0] == "Объявление A" and names[1] == "Объявление B"
+    assert _v(rows[3][sb.K]) is None                       # у B нет кода — CRM пусто
+    assert _v(rows[4][sb.K]) == 7
 
 
 def test_date_vertical_only_in_tall_blocks():

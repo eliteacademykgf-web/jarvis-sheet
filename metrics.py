@@ -43,18 +43,14 @@ def day_bounds(d: date_cls) -> tuple:
     return int(start.timestamp()), int(end.timestamp())
 
 
-def normalize_code_word(word: Optional[str]) -> str:
+def code_key(word: Optional[str]) -> str:
     """
-    Ключ сравнения кодовых слов: без регистра, без эмодзи и знаков,
-    пробелы схлопнуты. «ГЕРМАНИЯ  🤍» и «германия 🔥» → «германия».
-    Если букв и цифр нет совсем («➕➕➕»), сравниваем всю строку
-    (обрезка, схлопывание пробелов, без регистра), иначе такие слова
-    совпадали бы с любым пустым значением.
+    Ключ сравнения кодовых слов: без регистра, пробелы схлопнуты, без
+    невидимого селектора эмодзи (U+FE0F). Сами эмодзи значимы: «ИТАЛИЯ 💚»
+    и «ИТАЛИЯ 🌟» — разные объявления, склеивать их нельзя.
+    «АКШ  🌟» и «акш 🌟» → один ключ. Пустое слово → "".
     """
-    raw = re.sub(r"\s+", " ", (word or "")).strip().casefold()
-    letters = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in raw)
-    letters = re.sub(r"\s+", " ", letters).strip()
-    return letters or raw
+    return re.sub(r"\s+", " ", (word or "").replace("️", "")).strip().casefold()
 
 
 def lead_code_word(lead: dict) -> Optional[str]:
@@ -64,11 +60,6 @@ def lead_code_word(lead: dict) -> Optional[str]:
     поле «Источник»).
     """
     return _cf_value(lead, FIELD_CODE_WORD, None)
-
-
-def _match_code_word(lead: dict, key: str) -> bool:
-    cw = lead_code_word(lead)
-    return bool(cw) and normalize_code_word(cw) == key
 
 
 def _sort_by_status(pipeline_id: int) -> Dict[int, int]:
@@ -127,12 +118,19 @@ def _first_sale_ts(history: Optional[list]) -> Optional[int]:
     return min(ts_list) if ts_list else None
 
 
-def compute_metrics_range(df: int, dt: int,
-                          pipeline_id: int = SALES_DEPT_PIPELINE_ID,
-                          code_word: Optional[str] = None,
-                          sales_pipeline_ids: Optional[List[int]] = None) -> dict:
+METRIC_KEYS = FUNNEL_STAGES + ["sale", "revenue"]
+
+
+def _empty() -> dict:
+    return {k: 0 for k in METRIC_KEYS}
+
+
+def compute_breakdown(df: int, dt: int,
+                      pipeline_id: int = SALES_DEPT_PIPELINE_ID,
+                      sales_pipeline_ids: Optional[List[int]] = None) -> tuple:
     """
-    Метрики за произвольный период [df, dt] (UNIX, границы включительно).
+    Метрики за период [df, dt] (UNIX, границы включительно): итог и разбивка
+    по кодовому слову за один проход (запросы к AmoCRM те же, что для итога).
 
     Этапы: когорта лидов, СОЗДАННЫХ в периоде в воронке pipeline_id
     (как amo_get_leads в боте), с дедупликацией dedup_leads, накопительно.
@@ -143,32 +141,37 @@ def compute_metrics_range(df: int, dt: int,
     20-го — продажа 3-го, а не двух дней. Иначе сумма по дням больше
     месячной цифры.
 
-    code_word: если передан, считаются только лиды (и продажи), у контакта
-    которых кодовое слово совпадает после normalize_code_word. Разнесение
-    по объявлениям при одинаковых словах здесь не делается.
+    -> (total, by_code): total — {new_request, …, sale, revenue};
+    by_code — {code_key: {code_word, new_request, …}}, ключ "" — лиды без
+    кодового слова. Дедупликация до разбивки, поэтому сумма by_code == total.
     """
     sales_pids = sales_pipeline_ids if sales_pipeline_ids is not None else PIPELINE_IDS
     sort_by_id = _sort_by_status(pipeline_id)
     th = _stage_thresholds(sort_by_id)
+    total, by_code = _empty(), {}
+
+    def bucket(lead: dict) -> dict:
+        word = (lead_code_word(lead) or "").strip()
+        key = code_key(word)
+        # подпись группы — первое встреченное написание слова
+        return by_code.setdefault(key, {"code_word": word, **_empty()})
 
     # ── Этапы: когорта по дате создания ─────────────────────────────────
     cohort = dedup_leads(amo_get_leads(pipeline_id, df, dt))
-    key = normalize_code_word(code_word) if code_word else None
-    if key:
-        cohort = [l for l in cohort if _match_code_word(l, key)]
     closed_ids = [l["id"] for l in cohort
                   if l.get("status_id") in (WON_STATUS, LOST_STATUS)]
     history = amo_get_status_history(closed_ids) if closed_ids else {}
 
-    counts = {stage: 0 for stage in FUNNEL_STAGES}
     for l in cohort:
         reached = _max_reached_sort(l, pipeline_id, sort_by_id, history.get(l["id"]))
-        for stage in FUNNEL_STAGES:
-            if reached >= th[stage]:
-                counts[stage] += 1
-    # Заявка = любой лид, созданный в периоде, даже если его статус
-    # не распознан (например, удалённый этап без истории).
-    counts["new_request"] = len(cohort)
+        b = bucket(l)
+        # Заявка = любой лид, созданный в периоде, даже если его статус
+        # не распознан (например, удалённый этап без истории).
+        for m in (total, b):
+            m["new_request"] += 1
+            for stage in FUNNEL_STAGES[1:]:
+                if reached >= th[stage]:
+                    m[stage] += 1
 
     # ── Продажи: события перехода в 142 / предоплату в периоде ──────────
     won_by_id: Dict[int, dict] = {}
@@ -176,21 +179,32 @@ def compute_metrics_range(df: int, dt: int,
         for l in amo_get_closed_leads(pid, df, dt):
             won_by_id.setdefault(l["id"], l)   # одна сделка в двух воронках — одна продажа
     sale_history = amo_get_status_history(list(won_by_id)) if won_by_id else {}
-    won_leads = []
     for lid, l in won_by_id.items():
         first = _first_sale_ts(sale_history.get(lid))
         # first is None — история не загрузилась: считаем продажей, как бот
         if first is None or first >= df:
-            won_leads.append(l)
-    if key:
-        won_leads = [l for l in won_leads if _match_code_word(l, key)]
-    revenue = sum(float(l.get("price") or 0) for l in won_leads)
+            price = float(l.get("price") or 0)
+            for m in (total, bucket(l)):
+                m["sale"] += 1
+                m["revenue"] += price
 
-    return {
-        **counts,
-        "sale":    len(won_leads),
-        "revenue": round(revenue),
-    }
+    for m in [total, *by_code.values()]:
+        m["revenue"] = round(m["revenue"])
+    return total, by_code
+
+
+def compute_metrics_range(df: int, dt: int,
+                          pipeline_id: int = SALES_DEPT_PIPELINE_ID,
+                          sales_pipeline_ids: Optional[List[int]] = None) -> dict:
+    """Итог за период без разбивки: {new_request, …, sale, revenue}."""
+    return compute_breakdown(df, dt, pipeline_id, sales_pipeline_ids)[0]
+
+
+def compute_daily_breakdown(date: date_cls,
+                            pipeline_id: int = SALES_DEPT_PIPELINE_ID) -> tuple:
+    """(итог, разбивка по кодовому слову) за календарный день по Бишкеку."""
+    df, dt = day_bounds(date)
+    return compute_breakdown(df, dt, pipeline_id)
 
 
 def compute_daily_metrics(date: date_cls,
@@ -198,11 +212,5 @@ def compute_daily_metrics(date: date_cls,
     """
     Метрики за один календарный день (Бишкек), одна сводка по всей воронке:
     {new_request, lead, qualified, consult_scheduled, consult_done, sale, revenue}
-
-    Без разбивки по объявлениям: поле кодового слова в CRM не заполняется,
-    с заказчиком договорились считать CRM-показатели на день целиком.
-    Фильтр по кодовому слову остался в compute_metrics_range(code_word=...)
-    на случай, если поле начнут заполнять.
     """
-    df, dt = day_bounds(date)
-    return compute_metrics_range(df, dt, pipeline_id)
+    return compute_daily_breakdown(date, pipeline_id)[0]

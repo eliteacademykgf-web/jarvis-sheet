@@ -58,6 +58,12 @@ CRM_SHEET = "crm_daily"
 CRM_HEADERS = ["date", "new_request", "lead", "qualified", "consult_scheduled",
                "consult_done", "sale", "revenue", "note"]
 
+# Разбивка CRM по кодовому слову (поле контакта в AmoCRM). code_key —
+# ключ сравнения (metrics.code_key), "" — заявки без кодового слова.
+CRM_CODE_SHEET = "crm_by_code"
+CRM_CODE_HEADERS = ["date", "code_key", "code_word", "new_request", "lead", "qualified",
+                    "consult_scheduled", "consult_done", "sale", "revenue"]
+
 # Ручной справочник объявлений: менеджеры правят code_word и status,
 # отчёт только читает. Скрипт лишь дописывает строки для новых ad_id.
 ADS_MANUAL_SHEET = "ads_manual"
@@ -130,10 +136,25 @@ def _cell(value):
     return "" if value is None else value
 
 
+def _is_number(text: str) -> bool:
+    try:
+        float(str(text).replace(",", ".").replace("\xa0", "").replace(" ", ""))
+        return True
+    except ValueError:
+        return False
+
+
 def _upsert(ws: gspread.Worksheet, headers: List[str], key_fields: List[str],
-            rows: List[dict]) -> Tuple[int, int]:
+            rows: List[dict], replace_scope: Optional[Tuple[str, str]] = None
+            ) -> Tuple[int, int]:
     """
     Upsert rows на лист ws по ключу key_fields. Возвращает (добавлено, обновлено).
+
+    replace_scope=(поле, значение): строки листа с этим значением поля,
+    которых нет во входе, обнуляются (числовые поля — 0, ключ остаётся).
+    Так весь срез (например, день) заменяется целиком, а исчезнувшие
+    ключи не висят со старыми цифрами. Строки не удаляются: удаление
+    сдвинуло бы номера, а запись идёт одним batch по номерам строк.
 
     Запросы: одно чтение листа и один batch_update на все строки (плюс
     add_rows, если в сетке листа не хватает строк). Пишем RAW: date и
@@ -158,6 +179,16 @@ def _upsert(ws: gspread.Worksheet, headers: List[str], key_fields: List[str],
         key = tuple(str(_cell(row.get(k))) for k in key_fields)
         vals = [_cell(row.get(h)) for h in headers]
         (to_update if key in existing else to_insert)[key] = vals
+
+    if replace_scope:
+        field, value = replace_scope
+        f_idx = headers.index(field)
+        for n, r in enumerate(values[1:], start=2):
+            r = r + [""] * (len(headers) - len(r))
+            key = tuple(r[i] for i in key_idx)
+            if r[f_idx] == value and key not in to_update and existing.get(key) == n:
+                to_update[key] = [c if (i in key_idx or not _is_number(c)) else 0
+                                  for i, c in enumerate(r[:len(headers)])]
 
     data = [{"range": f"A{existing[k]}:{last_col}{existing[k]}", "values": [v]}
             for k, v in to_update.items()]
@@ -189,6 +220,20 @@ def write_crm_row(row: dict,
     with _access_errors():
         ws = get_or_create_worksheet(spreadsheet, CRM_SHEET, CRM_HEADERS)
         return _upsert(ws, CRM_HEADERS, ["date"], [row])
+
+
+def write_crm_code_rows(day: str, rows: List[dict],
+                        spreadsheet: Optional[gspread.Spreadsheet] = None) -> Tuple[int, int]:
+    """
+    Upsert разбивки CRM по кодовым словам на лист crm_by_code по
+    (date, code_key). Весь день заменяется целиком: слова, которых
+    в этот день больше нет, обнуляются. -> (добавлено, обновлено)
+    """
+    spreadsheet = spreadsheet or open_spreadsheet()
+    with _access_errors():
+        ws = get_or_create_worksheet(spreadsheet, CRM_CODE_SHEET, CRM_CODE_HEADERS)
+        return _upsert(ws, CRM_CODE_HEADERS, ["date", "code_key"], rows,
+                       replace_scope=("date", day))
 
 
 def read_ads_manual(spreadsheet: gspread.Spreadsheet, ads: dict,

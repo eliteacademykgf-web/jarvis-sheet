@@ -27,7 +27,9 @@ from datetime import date
 
 import gspread
 
+from metrics import code_key
 from sheets_client import (META_SHEET, META_HEADERS, CRM_SHEET, CRM_HEADERS,
+                           CRM_CODE_SHEET, CRM_CODE_HEADERS,
                            _access_errors, get_client, open_spreadsheet,
                            read_ads_manual)
 
@@ -193,21 +195,30 @@ def _num(x) -> float:
     return x if isinstance(x, (int, float)) else 0
 
 
-def _load_month(spreadsheet: gspread.Spreadsheet, year: int, month: int):
-    """meta по дням {date: [row]}, crm {date: row} за месяц."""
-    resp = spreadsheet.values_batch_get(
-        [f"'{META_SHEET}'", f"'{CRM_SHEET}'"],
-        params={"valueRenderOption": "UNFORMATTED_VALUE"})
-    meta_vals, crm_vals = (vr.get("values", []) for vr in resp["valueRanges"])
+def _load_month(spreadsheet: gspread.Spreadsheet, year: int, month: int,
+                with_codes: bool = True):
+    """
+    За месяц: meta по дням {date: [row]}, crm {date: row} и разбивка по
+    кодовым словам {date: {code_key: row}} (пусто, если листа crm_by_code
+    ещё нет — таблицы, залитые до разбивки).
+    """
+    ranges = [f"'{META_SHEET}'", f"'{CRM_SHEET}'"] + ([f"'{CRM_CODE_SHEET}'"] if with_codes else [])
+    resp = spreadsheet.values_batch_get(ranges, params={"valueRenderOption": "UNFORMATTED_VALUE"})
+    vals = [vr.get("values", []) for vr in resp["valueRanges"]]
     prefix = f"{year}-{month:02d}-"
 
     meta = defaultdict(list)
-    for r in _records(meta_vals, META_HEADERS):
+    for r in _records(vals[0], META_HEADERS):
         if str(r["date"]).startswith(prefix):
             meta[r["date"]].append(r)
-    crm = {r["date"]: r for r in _records(crm_vals, CRM_HEADERS)
+    crm = {r["date"]: r for r in _records(vals[1], CRM_HEADERS)
            if str(r["date"]).startswith(prefix)}
-    return meta, crm
+    codes = defaultdict(dict)
+    if with_codes:
+        for r in _records(vals[2], CRM_CODE_HEADERS):
+            if str(r["date"]).startswith(prefix):
+                codes[r["date"]][str(r["code_key"])] = r
+    return meta, crm, codes
 
 
 def _check_no_references(spreadsheet: gspread.Spreadsheet, title: str, others: list):
@@ -235,12 +246,61 @@ def _check_no_references(spreadsheet: gspread.Spreadsheet, title: str, others: l
 # ============================================================
 # СБОРКА
 # ============================================================
-def _build(meta: dict, crm: dict, manual: dict):
+CRM_METRICS = ["new_request", "lead", "qualified", "consult_done", "sale"]
+REST = "rest"   # строка блока с заявками без кодового слова / с чужими словами
+
+
+def _has_codes(day_codes: dict) -> bool:
+    """В этот день есть заявки или продажи с кодовым словом."""
+    return any(key and any(_num(r.get(m)) for m in CRM_METRICS)
+               for key, r in day_codes.items())
+
+
+def _segments(ads: list, day_crm: dict, day_codes: dict, manual: dict) -> list:
+    """
+    Блок дня как список сегментов (строки, CRM-показатели сегмента или None).
+    CRM-ячейки пишутся в первую строку сегмента и объединяются по его высоте.
+
+    Без кодовых слов в CRM — один сегмент на весь день (одно число на день).
+    С ними — объявления группируются по коду из ads_manual; у группы — цифры
+    её кодового слова. Объявления без совпавшего слова — без CRM-цифр.
+    Последняя строка — заявки без кодового слова и со словами, которых нет
+    ни у одного объявления дня: итог дня = сумма сегментов.
+    """
+    ads = sorted(ads, key=lambda x: -_num(x["spend"]))
+    if not _has_codes(day_codes):
+        return [(ads or [None], day_crm)]
+
+    def ad_key(ad):
+        return code_key(manual.get(str(ad["ad_id"]), {}).get("code_word"))
+
+    groups = defaultdict(list)
+    loose = []
+    for ad in ads:
+        key = ad_key(ad)
+        (groups[key] if key and key in day_codes else loose).append(ad)
+    order = sorted(groups, key=lambda k: -sum(_num(a["spend"]) for a in groups[k]))
+    segments = [(groups[k], day_codes[k]) for k in order]
+    segments += [([ad], None) for ad in loose]
+
+    rest = {m: sum(_num(r.get(m)) for k, r in day_codes.items() if k not in groups)
+            for m in CRM_METRICS}
+    others = sorted(str(r.get("code_word") or k) for k, r in day_codes.items()
+                    if k and k not in groups and any(_num(r.get(m)) for m in CRM_METRICS))
+    if any(rest.values()) or not segments:
+        rest["label"] = "Заявки без кодового слова" + (
+            f" и с кодами без объявлений: {', '.join(others)}" if others else "")
+        segments.append(([REST], rest))
+    return segments
+
+
+def _build(meta: dict, crm: dict, manual: dict, codes: dict = None):
     """
     -> (rows, merges, row_kinds): rows — список строк ячеек с 1-й строки
     листа, merges — (r0, r1, c0, c1) 0-based полуинтервалы,
     row_kinds — тип строки для высоты.
     """
+    codes = codes or {}
     merges, kinds = [], []
 
     # строка 2 — шапка (строку 1 соберём в конце, когда известны итоги дней)
@@ -254,58 +314,68 @@ def _build(meta: dict, crm: dict, manual: dict):
     body, total_rows = [], []
     r = 3                                          # 1-based номер текущей строки
     for day in sorted(set(meta) | set(crm), reverse=True):
-        ads = sorted(meta.get(day, []), key=lambda x: -_num(x["spend"])) or [None]
-        c = crm.get(day) or {}
-        s, e = r, r + len(ads) - 1                 # строки объявлений
+        segments = _segments(meta.get(day, []), crm.get(day) or {}, codes.get(day, {}), manual)
+        n_rows = sum(len(seg_rows) for seg_rows, _ in segments)
+        s, e = r, r + n_rows - 1                   # строки блока
         t = e + 1                                  # итог дня
+        name_fmt = _fmt(h="LEFT", v="MIDDLE", wrap=True, num=False)
 
-        for i, ad in enumerate(ads):
-            row = [_cell(None, _fmt(col)) for col in range(N_COLS)]
-            if i == 0:
-                row[A] = _cell(_serial(date.fromisoformat(day)), _date_fmt(len(ads)))
-                row[K] = _cell(c.get("new_request"), _fmt(K, v="MIDDLE"))
-                row[L] = _cell(_div(f"F{t}", f"K{s}"), _fmt(L, v="MIDDLE"))
-                row[M] = _cell(c.get("lead"), _fmt(M, v="MIDDLE"))
-                row[N] = _cell(_div(f"M{s}", f"K{s}"), _fmt(N, v="MIDDLE"))
-                row[O] = _cell(_div(f"F{t}", f"M{s}"), _fmt(O, v="MIDDLE"))
-                row[P] = _cell(c.get("qualified"), _fmt(P, v="MIDDLE"))
-                row[Q] = _cell(c.get("consult_done"), _fmt(Q, v="MIDDLE"))
-                row[R] = _cell(c.get("sale"), _fmt(R, v="MIDDLE"))
-                row[S] = _cell(_div(f"F{t}", f"P{s}"), _fmt(S, v="MIDDLE"))
-            name_fmt = _fmt(h="LEFT", v="MIDDLE", wrap=True, num=False)
-            if ad is None:
-                row[B] = _cell("нет данных Meta за день", name_fmt)
-            else:
-                ad_id = str(ad["ad_id"])
-                man = manual.get(ad_id, {})
-                row[B] = _cell(ad["ad_name"], name_fmt)
-                row[D] = _cell(man.get("code_word"), _fmt(wrap=True))
-                row[E] = _cell(man.get("status"), _fmt(bold=True, color=GREEN_TEXT, wrap=True))
-                row[F] = _cell(_num(ad["spend"]), _fmt(F))
-                row[G] = _cell(_num(ad["impressions"]), _fmt(G))
-                row[H] = _cell(_num(ad["cpm"]), _fmt(H))
-                row[I] = _cell(_num(ad["ctr"]) / 100, _fmt(I))   # Meta: 0.577 = 0.577%
-                row[J] = _cell(_num(ad["dm_leads"]), _fmt(J))
-                row[T] = _cell(ad_id, _fmt(num=False))
-                row[U] = _cell(_num(ad["clicks"]), _fmt(U))
-            row[C] = _cell(None, name_fmt)
-            body.append(row)
-            kinds.append(H_AD)
-            merges.append((r - 1, r, B, C + 1))
-            r += 1
+        for seg_rows, c in segments:
+            g0, g1 = r, r + len(seg_rows) - 1      # строки сегмента
+            spend = f"SUM(F{g0}:F{g1})"
+            for i, ad in enumerate(seg_rows):
+                row = [_cell(None, _fmt(col)) for col in range(N_COLS)]
+                if r == s:
+                    row[A] = _cell(_serial(date.fromisoformat(day)), _date_fmt(n_rows))
+                if i == 0 and c is not None:
+                    row[K] = _cell(_num(c.get("new_request")), _fmt(K, v="MIDDLE"))
+                    row[M] = _cell(_num(c.get("lead")), _fmt(M, v="MIDDLE"))
+                    row[N] = _cell(_div(f"M{g0}", f"K{g0}"), _fmt(N, v="MIDDLE"))
+                    row[P] = _cell(_num(c.get("qualified")), _fmt(P, v="MIDDLE"))
+                    row[Q] = _cell(_num(c.get("consult_done")), _fmt(Q, v="MIDDLE"))
+                    row[R] = _cell(_num(c.get("sale")), _fmt(R, v="MIDDLE"))
+                    if ad is not REST:             # у строки без объявлений нет расхода
+                        row[L] = _cell(_div(spend, f"K{g0}"), _fmt(L, v="MIDDLE"))
+                        row[O] = _cell(_div(spend, f"M{g0}"), _fmt(O, v="MIDDLE"))
+                        row[S] = _cell(_div(spend, f"P{g0}"), _fmt(S, v="MIDDLE"))
+                if ad is REST:
+                    row[B] = _cell(c["label"], _fmt(h="LEFT", v="MIDDLE", wrap=True, italic=True,
+                                                    num=False))
+                elif ad is None:
+                    row[B] = _cell("нет данных Meta за день", name_fmt)
+                else:
+                    ad_id = str(ad["ad_id"])
+                    man = manual.get(ad_id, {})
+                    row[B] = _cell(ad["ad_name"], name_fmt)
+                    row[D] = _cell(man.get("code_word"), _fmt(wrap=True))
+                    row[E] = _cell(man.get("status"), _fmt(bold=True, color=GREEN_TEXT, wrap=True))
+                    row[F] = _cell(_num(ad["spend"]), _fmt(F))
+                    row[G] = _cell(_num(ad["impressions"]), _fmt(G))
+                    row[H] = _cell(_num(ad["cpm"]), _fmt(H))
+                    row[I] = _cell(_num(ad["ctr"]) / 100, _fmt(I))   # Meta: 0.577 = 0.577%
+                    row[J] = _cell(_num(ad["dm_leads"]), _fmt(J))
+                    row[T] = _cell(ad_id, _fmt(num=False))
+                    row[U] = _cell(_num(ad["clicks"]), _fmt(U))
+                row[C] = _cell(None, name_fmt)
+                body.append(row)
+                kinds.append(H_AD)
+                merges.append((r - 1, r, B, C + 1))
+                r += 1
+            if g1 > g0 and c is not None:
+                merges.extend((g0 - 1, g1, col, col + 1) for col in CRM_BLOCK)
 
         if e > s:
             merges.append((s - 1, e, A, A + 1))
-            merges.extend((s - 1, e, col, col + 1) for col in CRM_BLOCK)
 
-        # итог дня
+        # итог дня: CRM — сумма сегментов (в объединённых ячейках число
+        # только в верхней, SUM это учитывает)
         tot = {
             F: f"=SUM(F{s}:F{e})", G: f"=SUM(G{s}:G{e})",
             H: _div(f"F{t}", f"G{t}", "*1000"), I: _div(f"U{t}", f"G{t}"),
-            J: f"=SUM(J{s}:J{e})", K: f"=K{s}", L: _div(f"F{t}", f"K{t}"),
-            M: f"=M{s}", N: _div(f"M{t}", f"K{t}"), O: _div(f"F{t}", f"M{t}"),
-            P: f"=P{s}", Q: f"=Q{s}", R: f"=R{s}", S: _div(f"F{t}", f"P{t}"),
-            U: f"=SUM(U{s}:U{e})",
+            J: f"=SUM(J{s}:J{e})", K: f"=SUM(K{s}:K{e})", L: _div(f"F{t}", f"K{t}"),
+            M: f"=SUM(M{s}:M{e})", N: _div(f"M{t}", f"K{t}"), O: _div(f"F{t}", f"M{t}"),
+            P: f"=SUM(P{s}:P{e})", Q: f"=SUM(Q{s}:Q{e})", R: f"=SUM(R{s}:R{e})",
+            S: _div(f"F{t}", f"P{t}"), U: f"=SUM(U{s}:U{e})",
         }
         row = [_cell(tot.get(col), _fmt(col, bg=TOTAL_BG)) for col in range(N_COLS)]
         row[A] = _cell("В общем", _fmt(size=21, bold=True, bg=TOTAL_BG, wrap=True, num=False))
@@ -414,11 +484,12 @@ def rebuild_month_sheet(year: int, month: int,
             titles.add(set_aside)
             target = None
         if target is not None:
-            own = {title, META_SHEET, CRM_SHEET}
+            own = {title, META_SHEET, CRM_SHEET, CRM_CODE_SHEET}
             _check_no_references(spreadsheet, title,
                                  [t for t in titles if t not in own])
 
-        meta, crm = _load_month(spreadsheet, year, month)
+        meta, crm, codes = _load_month(spreadsheet, year, month,
+                                       with_codes=CRM_CODE_SHEET in titles)
         ads = {str(a["ad_id"]): a["ad_name"] for rows in meta.values() for a in rows}
         # коды с отложенных ручных листов этого месяца — только для объявлений,
         # которых ещё нет в ads_manual (существующие строки не меняются)
@@ -428,7 +499,7 @@ def rebuild_month_sheet(year: int, month: int,
         defaults = {ad_id: imported[_norm_name(name)] for ad_id, name in ads.items()
                     if _norm_name(name) in imported}
         manual = read_ads_manual(spreadsheet, ads, defaults)
-        rows, merges, heights = _build(meta, crm, manual)
+        rows, merges, heights = _build(meta, crm, manual, codes)
 
         if target is None:
             ws = spreadsheet.add_worksheet(title=title, rows=max(len(rows) + 50, 200),
